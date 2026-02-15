@@ -177,6 +177,7 @@ export INSTANCE_PROMPT="ethnographic photo of galician horreo or cruceiro, natur
 Run training:
 
 ```bash
+export MIXED_PRECISION=bf16   # use fp16 on T4
 bash scripts/train_flux_lora_deepspeed.sh
 ```
 
