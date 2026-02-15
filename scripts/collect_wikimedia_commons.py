@@ -189,6 +189,7 @@ def main() -> None:
 
     source_log = root / "sources_wikimedia_commons.jsonl"
     summary: dict[str, int] = {}
+    seen_global: set[str] = set()
 
     work_items: list[tuple[str, str]] = []
     # categories first (more precise), then free-text search queries
@@ -201,7 +202,6 @@ def main() -> None:
         label_dir.mkdir(parents=True, exist_ok=True)
 
         saved = 0
-        seen: set[str] = set()
         continuation: dict[str, Any] | None = None
 
         for _ in range(args.max_requests):
@@ -237,9 +237,9 @@ def main() -> None:
                 if not isinstance(download_url, str) or not download_url.startswith("http"):
                     download_url = original_url
 
-                if original_url in seen:
+                if original_url in seen_global:
                     continue
-                seen.add(original_url)
+                seen_global.add(original_url)
 
                 image = download_and_validate(url=download_url, timeout=args.timeout, min_side=args.min_side)
                 if image is None:
