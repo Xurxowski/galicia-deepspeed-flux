@@ -171,6 +171,9 @@ def main() -> None:
         attrs = extract_attrs(html)
 
         for raw in attrs:
+            if saved >= args.max_images:
+                break
+
             full = normalize_url(page_url, raw)
             if not full or not same_domain(full):
                 continue
