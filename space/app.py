@@ -7,9 +7,12 @@ import threading
 import gradio as gr
 import torch
 from diffusers import FluxPipeline, StableDiffusionPipeline, ZImagePipeline
+from huggingface_hub import InferenceClient, get_token
 
 BASE_MODEL = os.getenv("BASE_MODEL", "Tongyi-MAI/Z-Image-Turbo")
 CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "stabilityai/sd-turbo")
+USE_INFERENCE_API = os.getenv("USE_INFERENCE_API", "1").strip().lower() not in {"0", "false", "no", "off"}
+INFERENCE_TIMEOUT_SEC = float(os.getenv("INFERENCE_TIMEOUT_SEC", "120"))
 LORA_REPO = os.getenv("LORA_REPO", "")
 LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors")
 LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux | z-image | both/auto
@@ -60,6 +63,8 @@ def _apply_common_pipeline_tuning(current_pipe) -> None:
 def _try_load_lora(current_pipe, kind: str) -> tuple[str, bool]:
     if not LORA_REPO:
         return "", False
+    if kind.startswith("remote-"):
+        return "LoRA disabled: remote Inference API mode does not support applying LoRAs.", False
     if kind not in {"z-image", "flux"}:
         return f"LoRA ignored for pipeline `{kind}`.", False
     if LORA_TARGET in {"flux", "flux-only"} and kind != "flux":
@@ -77,6 +82,15 @@ def _build_pipeline(target_model: str):
     target_lower = target_model.lower()
 
     if not torch.cuda.is_available() and ("z-image" in target_lower or "flux" in target_lower):
+        if USE_INFERENCE_API:
+            token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
+            client = InferenceClient(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
+            note = (
+                f"CPU runtime detected: using Hugging Face Inference API for `{target_model}`.\n"
+                "If generation fails, add `HF_TOKEN` as a Space secret and ensure you accepted the model license."
+            )
+            return client, f"remote-{target_model.split('/')[-1].lower()}", target_model, note
+
         cpu_pipe = StableDiffusionPipeline.from_pretrained(
             CPU_FALLBACK_MODEL,
             torch_dtype=torch.float32,
@@ -110,6 +124,12 @@ def _status_text() -> str:
     )
     if last_model_note:
         return f"{base}\n\n{last_model_note}"
+    if pipeline_kind.startswith("remote-"):
+        return (
+            f"{base}\n\n"
+            "Running in **remote Inference API** mode (no GPU required). "
+            "If it errors, add `HF_TOKEN` as a Space secret."
+        )
     if pipeline_kind == "cpu-fallback":
         return (
             f"{base}\n\n"
@@ -168,7 +188,7 @@ def build_prompt(subject: str, details: str) -> str:
         "horreo": (
             f"{token_horreo} traditional Galician horreo (raised granary), "
             "long narrow granary with slatted chamber, on stone pillars (pegollos) "
-            "with capstones, rural Galicia, no modern house"
+            "with capstones, exterior view, full structure visible, rural Galicia, no modern house, no interior"
         ),
         "cruceiro": (
             f"{token_cruceiro} Galician cruceiro, carved granite cross on stone pedestal, "
@@ -222,7 +242,7 @@ def recommended_preset():
         kind = pipeline_kind
         model_id = effective_model_id
 
-    if kind == "flux":
+    if kind == "flux" or kind.startswith("remote-"):
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
     if kind == "z-image":
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
@@ -284,7 +304,27 @@ def generate(
         if active_kind in {"z-image", "flux"}:
             kwargs["max_sequence_length"] = use_seq_len
 
-        image = active_pipe(**kwargs).images[0]
+        if active_kind.startswith("remote-"):
+            try:
+                image = active_pipe.text_to_image(
+                    prompt,
+                    height=use_resolution,
+                    width=use_resolution,
+                    num_inference_steps=use_steps,
+                    guidance_scale=guidance,
+                    seed=seed,
+                )
+            except Exception as exc:
+                raise gr.Error(
+                    "Remote Inference API call failed.\n\n"
+                    "Common fixes:\n"
+                    "- Add `HF_TOKEN` as a Space secret\n"
+                    "- Accept the model license on its model page\n"
+                    "- If using Z-Image-Turbo: it may require paid inference credits\n\n"
+                    f"Error: {exc}"
+                ) from exc
+        else:
+            image = active_pipe(**kwargs).images[0]
 
     return image, prompt, status_snapshot
 
