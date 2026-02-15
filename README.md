@@ -179,3 +179,94 @@ The app in `space/app.py` will load Z-Image-Turbo by default (or FLUX if you set
 5. Run inference in HF Space.
 
 This gives you near-zero local storage usage and keeps your project fully portable.
+
+## 7) Facebook Group + Concept-Specific Retraining
+
+If you use Facebook groups (for example, `TODOS LOS HORREOS DE GALICIA RECOPILADOS`), do not scrape automatically.
+Use manual download only, and keep permission/license references.
+
+Important:
+- the current FLUX DreamBooth launcher uses one `INSTANCE_PROMPT` for all images.
+- for better fidelity, train one LoRA for `horreo` and another LoRA for `cruceiro`.
+
+### A) Import manually downloaded Facebook images
+
+Horreos:
+
+```bash
+python scripts/import_licensed_stock_manual.py \
+  --input_dir /tmp/facebook_downloads/horreos \
+  --out_dir /tmp/galicia_raw \
+  --label horreo \
+  --source facebook_group_todos_horreos_galicia \
+  --license_reference "fb-group-permission-2026-02-15"
+```
+
+Cruceiros:
+
+```bash
+python scripts/import_licensed_stock_manual.py \
+  --input_dir /tmp/facebook_downloads/cruceiros \
+  --out_dir /tmp/galicia_raw \
+  --label cruceiro \
+  --source facebook_group_cruceiros_galicia \
+  --license_reference "fb-group-permission-2026-02-15"
+```
+
+### B) Build concept-specific datasets
+
+Horreo dataset:
+
+```bash
+python scripts/build_imagefolder_dataset.py \
+  --raw_dir /tmp/galicia_raw \
+  --dataset_dir /tmp/galicia_dataset_horreo \
+  --caption_profile horreo_focus \
+  --include_labels horreo \
+  --val_ratio 0.1
+```
+
+Cruceiro dataset:
+
+```bash
+python scripts/build_imagefolder_dataset.py \
+  --raw_dir /tmp/galicia_raw \
+  --dataset_dir /tmp/galicia_dataset_cruceiro \
+  --caption_profile cruceiro_focus \
+  --include_labels cruceiro \
+  --val_ratio 0.1
+```
+
+### C) Train one LoRA per concept
+
+Horreo LoRA:
+
+```bash
+export DATA_DIR=/tmp/galicia_dataset_horreo/train
+export OUTPUT_DIR=/tmp/flux-galicia-lora-horreo
+export INSTANCE_PROMPT="ethnographic documentary photo of a traditional galician horreo, raised granary on stone pillars (pegollos), elongated slatted chamber, Galicia"
+bash scripts/train_flux_lora_deepspeed.sh
+```
+
+Cruceiro LoRA:
+
+```bash
+export DATA_DIR=/tmp/galicia_dataset_cruceiro/train
+export OUTPUT_DIR=/tmp/flux-galicia-lora-cruceiro
+export INSTANCE_PROMPT="ethnographic documentary photo of a galician cruceiro, carved granite cross on stone pedestal, historic village context, Galicia"
+bash scripts/train_flux_lora_deepspeed.sh
+```
+
+### D) Upload both LoRAs
+
+```bash
+python scripts/upload_to_hub.py \
+  --repo_id "$HF_USERNAME/flux-schnell-galicia-lora-horreo" \
+  --repo_type model \
+  --folder_path /tmp/flux-galicia-lora-horreo
+
+python scripts/upload_to_hub.py \
+  --repo_id "$HF_USERNAME/flux-schnell-galicia-lora-cruceiro" \
+  --repo_type model \
+  --folder_path /tmp/flux-galicia-lora-cruceiro
+```
