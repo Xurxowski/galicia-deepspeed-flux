@@ -1,0 +1,7 @@
+gradio>=5.0.0
+diffusers>=0.35.1
+transformers>=4.44.0
+accelerate>=1.10.0
+torch>=2.2.0
+sentencepiece>=0.2.0
+safetensors>=0.4.0
