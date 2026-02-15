@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min_side", type=int, default=512, help="Minimum width/height")
     parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout")
     parser.add_argument("--sleep_sec", type=float, default=0.4, help="Pause between API calls")
+    parser.add_argument(
+        "--sleep_image_sec",
+        type=float,
+        default=0.2,
+        help="Pause between image downloads (helps avoid rate-limits)",
+    )
     return parser.parse_args()
 
 
@@ -168,18 +174,23 @@ def safe_stem(url: str) -> str:
 
 
 def download_and_validate(url: str, timeout: float, min_side: int) -> Image.Image | None:
-    try:
-        response = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
-        response.raise_for_status()
-        image = Image.open(BytesIO(response.content))
-        image.load()
-        if min(image.width, image.height) < min_side:
-            return None
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        return image
-    except Exception:
-        return None
+    for attempt in range(2):
+        try:
+            response = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
+            if response.status_code in {429, 503} and attempt == 0:
+                time.sleep(2.0)
+                continue
+            response.raise_for_status()
+            image = Image.open(BytesIO(response.content))
+            image.load()
+            if min(image.width, image.height) < min_side:
+                return None
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            return image
+        except Exception:
+            continue
+    return None
 
 
 def main() -> None:
@@ -242,6 +253,8 @@ def main() -> None:
                 seen_global.add(original_url)
 
                 image = download_and_validate(url=download_url, timeout=args.timeout, min_side=args.min_side)
+                if args.sleep_image_sec > 0:
+                    time.sleep(args.sleep_image_sec)
                 if image is None:
                     continue
 
