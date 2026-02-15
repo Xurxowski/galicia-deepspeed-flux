@@ -21,6 +21,11 @@ def parse_args() -> argparse.Namespace:
         help="BASE_MODEL Space variable value",
     )
     parser.add_argument("--lora_repo", default=None, help="Optional LORA_REPO Space variable value")
+    parser.add_argument(
+        "--lora_target",
+        default=None,
+        help="Optional LORA_TARGET Space variable value (flux|z-image|both/auto)",
+    )
     return parser.parse_args()
 
 
@@ -58,6 +63,13 @@ def main() -> None:
             print(f"Set Space variable LORA_REPO={args.lora_repo}")
         else:
             print(f"Set variable manually in Space settings: LORA_REPO={args.lora_repo}")
+
+    if args.lora_target:
+        if hasattr(api, "add_space_variable"):
+            api.add_space_variable(repo_id=args.space_id, key="LORA_TARGET", value=args.lora_target)
+            print(f"Set Space variable LORA_TARGET={args.lora_target}")
+        else:
+            print(f"Set variable manually in Space settings: LORA_TARGET={args.lora_target}")
 
     print(f"Space uploaded: https://huggingface.co/spaces/{args.space_id}")
 
