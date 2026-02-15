@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Wikimedia Commons images")
     parser.add_argument(
         "--queries",
-        nargs="+",
+        nargs="*",
         default=["horreo galicia", "cruceiro galicia"],
         help="Commons search queries",
     )
