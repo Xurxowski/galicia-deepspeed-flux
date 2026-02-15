@@ -24,24 +24,29 @@ MODEL_CHOICES = [
     "stabilityai/stable-diffusion-2-1-base",
 ]
 
-DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+def _pick_torch_dtype() -> torch.dtype:
+    if not torch.cuda.is_available():
+        return torch.float32
+    # T4 does not support bf16; prefer fp16 unless bf16 is supported.
+    if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
+DTYPE = _pick_torch_dtype()
 GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-STABLE_STEPS = 8
-STABLE_GUIDANCE = 6.0
-STABLE_RESOLUTION = 640
-STABLE_FAST_MODE = False
-STABLE_QUALITY = "stable"
-DEFAULT_STEPS = STABLE_STEPS
-DEFAULT_RESOLUTION = STABLE_RESOLUTION
-DEFAULT_FAST_MODE = STABLE_FAST_MODE
-DEFAULT_QUALITY = STABLE_QUALITY
-DEFAULT_NEGATIVE = "blurry, low quality, watermark, text, logo, deformed"
+DEFAULT_QUALITY = "stable"
+DEFAULT_NEGATIVE = (
+    "blurry, low quality, watermark, text, logo, deformed, "
+    "modern house, cottage, cabin, villa, apartment building"
+)
 
 pipe = None
 pipeline_kind = ""
 requested_model_id = ""
 effective_model_id = ""
 last_model_note = ""
+lora_active = False
 MODEL_LOCK = threading.Lock()
 
 
@@ -52,20 +57,20 @@ def _apply_common_pipeline_tuning(current_pipe) -> None:
         current_pipe.set_progress_bar_config(disable=True)
 
 
-def _try_load_lora(current_pipe, kind: str) -> str:
+def _try_load_lora(current_pipe, kind: str) -> tuple[str, bool]:
     if not LORA_REPO:
-        return ""
+        return "", False
     if kind not in {"z-image", "flux"}:
-        return f"LoRA ignored for pipeline `{kind}`."
+        return f"LoRA ignored for pipeline `{kind}`.", False
     if LORA_TARGET in {"flux", "flux-only"} and kind != "flux":
-        return "LoRA configured for `flux`; ignored for `z-image`."
+        return "LoRA configured for `flux`; ignored for `z-image`.", False
     if LORA_TARGET in {"z-image", "zimage", "z-image-only"} and kind != "z-image":
-        return "LoRA configured for `z-image`; ignored for `flux`."
+        return "LoRA configured for `z-image`; ignored for `flux`.", False
     try:
         current_pipe.load_lora_weights(LORA_REPO, weight_name=LORA_WEIGHT_NAME)
-        return f"LoRA loaded from `{LORA_REPO}`."
+        return f"LoRA loaded from `{LORA_REPO}`.", True
     except Exception as exc:
-        return f"Could not load LoRA `{LORA_REPO}`: {exc}"
+        return f"Could not load LoRA `{LORA_REPO}`: {exc}", False
 
 
 def _build_pipeline(target_model: str):
@@ -105,11 +110,17 @@ def _status_text() -> str:
     )
     if last_model_note:
         return f"{base}\n\n{last_model_note}"
+    if pipeline_kind == "cpu-fallback":
+        return (
+            f"{base}\n\n"
+            "Tip: this Space is running on CPU. To use FLUX / Z-Image, switch the Space Hardware to a GPU "
+            "(T4 or A10) in the Space Settings."
+        )
     return base
 
 
 def switch_model(target_model: str) -> str:
-    global pipe, pipeline_kind, requested_model_id, effective_model_id, last_model_note
+    global pipe, pipeline_kind, requested_model_id, effective_model_id, last_model_note, lora_active
 
     with MODEL_LOCK:
         previous_pipe = pipe
@@ -117,16 +128,18 @@ def switch_model(target_model: str) -> str:
         previous_requested = requested_model_id
         previous_effective = effective_model_id
         previous_note = last_model_note
+        previous_lora_active = lora_active
 
         try:
             next_pipe, next_kind, next_effective, load_note = _build_pipeline(target_model)
             _apply_common_pipeline_tuning(next_pipe)
-            lora_note = _try_load_lora(next_pipe, next_kind)
+            lora_note, lora_loaded = _try_load_lora(next_pipe, next_kind)
 
             pipe = next_pipe
             pipeline_kind = next_kind
             requested_model_id = target_model
             effective_model_id = next_effective
+            lora_active = lora_loaded
 
             merged_note = "\n".join([n for n in [load_note, lora_note] if n])
             last_model_note = merged_note
@@ -143,22 +156,36 @@ def switch_model(target_model: str) -> str:
             requested_model_id = previous_requested
             effective_model_id = previous_effective
             last_model_note = previous_note
+            lora_active = previous_lora_active
             return _status_text() + f"\n\nModel switch failed: {exc}"
 
 
 def build_prompt(subject: str, details: str) -> str:
+    token_horreo = TOKEN_HORREO if lora_active else ""
+    token_cruceiro = TOKEN_CRUCEIRO if lora_active else ""
+    token_muino = TOKEN_MUINO if lora_active else ""
     subject_map = {
-        "horreo": f"{TOKEN_HORREO} galician horreo, raised granary on stone pillars (pegollos)",
-        "cruceiro": f"{TOKEN_CRUCEIRO} galician cruceiro, carved granite cross on stone pedestal",
-        "muino": f"{TOKEN_MUINO} galician muino (water mill), stone millhouse near stream",
+        "horreo": (
+            f"{token_horreo} traditional Galician horreo (raised granary), "
+            "long narrow granary with slatted chamber, on stone pillars (pegollos) "
+            "with capstones, rural Galicia, no modern house"
+        ),
+        "cruceiro": (
+            f"{token_cruceiro} Galician cruceiro, carved granite cross on stone pedestal, "
+            "historic village context, rural Galicia"
+        ),
+        "muino": (
+            f"{token_muino} traditional Galician muino (water mill), "
+            "stone millhouse near a stream, moss and granite textures, rural Galicia"
+        ),
         "mixed": (
-            f"{TOKEN_HORREO} and {TOKEN_CRUCEIRO} in a galician ethnographic scene"
+            "traditional Galician horreo and a Galician cruceiro in the same ethnographic scene, rural Galicia"
         ),
     }
     base = subject_map.get(subject, subject)
     return (
-        f"ethnographic photography, {base}, Galicia, stone and wood textures, "
-        f"natural light, realistic details, {details}"
+        f"ethnographic documentary photography, {base}, "
+        f"stone and wood textures, natural light, realistic details, {details}"
     )
 
 
@@ -171,10 +198,8 @@ def apply_quality_profile(steps: int, resolution: int, quality_profile: str, fas
     current_steps = steps
     current_res = resolution
 
-    if quality_profile == "stable":
-        current_steps = max(current_steps, STABLE_STEPS)
-        current_res = max(current_res, STABLE_RESOLUTION)
-    elif quality_profile == "fast":
+    # stable: keep user/model preset as-is.
+    if quality_profile == "fast":
         current_steps = min(current_steps, 3)
         current_res = min(current_res, 640)
     elif quality_profile == "balanced":
@@ -191,15 +216,32 @@ def apply_quality_profile(steps: int, resolution: int, quality_profile: str, fas
     return current_steps, current_res
 
 
+def recommended_preset():
+    # Pipeline-aware presets so you can just press Generate.
+    with MODEL_LOCK:
+        kind = pipeline_kind
+        model_id = effective_model_id
+
+    if kind == "flux":
+        return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
+    if kind == "z-image":
+        return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
+    if model_id == "stabilityai/sd-turbo" or kind == "cpu-fallback":
+        return (1, 0.0, 512, "stable", False, DEFAULT_NEGATIVE)
+    # Generic SD pipeline (higher-quality but slower).
+    return (25, 7.0, 768, "stable", False, DEFAULT_NEGATIVE)
+
+
 def apply_stable_preset():
     return (
-        STABLE_STEPS,
-        STABLE_GUIDANCE,
-        STABLE_RESOLUTION,
-        STABLE_QUALITY,
-        STABLE_FAST_MODE,
-        DEFAULT_NEGATIVE,
+        *recommended_preset(),
     )
+
+
+def switch_model_and_apply_preset(target_model: str):
+    status = switch_model(target_model)
+    steps, guidance, resolution, quality_profile, fast_mode, negative = recommended_preset()
+    return status, steps, guidance, resolution, quality_profile, fast_mode, negative
 
 
 def generate(
@@ -249,6 +291,7 @@ def generate(
 
 # Initialize pipeline once at startup.
 switch_model(BASE_MODEL)
+INIT_STEPS, INIT_GUIDANCE, INIT_RESOLUTION, INIT_QUALITY, INIT_FAST_MODE, INIT_NEGATIVE = recommended_preset()
 
 with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
     gr.Markdown(
@@ -266,7 +309,7 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
 
     model_status = gr.Markdown(_status_text())
     gr.Markdown(
-        "Preset fijo activo: `Calidad estable` (steps 8, guidance 6.0, resolution 640, fast mode OFF)."
+        "Preset recomendado activo. Si cambias el modelo, pulsa `Apply Model` para reajustar los valores."
     )
     gr.Markdown("Tip: on `cpu-basic`, large models are auto-fallback to lightweight CPU model.")
 
@@ -282,23 +325,23 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         )
 
     negative_details = gr.Textbox(
-        value=DEFAULT_NEGATIVE,
+        value=INIT_NEGATIVE,
         label="Negative prompt (for SD pipelines)",
     )
 
     with gr.Row():
         seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Seed")
-        steps = gr.Slider(minimum=1, maximum=60, value=DEFAULT_STEPS, step=1, label="Steps")
-        guidance = gr.Slider(minimum=0.0, maximum=12.0, value=STABLE_GUIDANCE, step=0.1, label="Guidance")
-        resolution = gr.Slider(minimum=512, maximum=1024, value=DEFAULT_RESOLUTION, step=64, label="Resolution")
+        steps = gr.Slider(minimum=1, maximum=60, value=INIT_STEPS, step=1, label="Steps")
+        guidance = gr.Slider(minimum=0.0, maximum=12.0, value=INIT_GUIDANCE, step=0.1, label="Guidance")
+        resolution = gr.Slider(minimum=512, maximum=1024, value=INIT_RESOLUTION, step=64, label="Resolution")
 
     with gr.Row():
         quality_profile = gr.Dropdown(
             choices=["stable", "fast", "balanced", "quality"],
-            value=DEFAULT_QUALITY,
+            value=INIT_QUALITY,
             label="Quality profile",
         )
-        fast_mode = gr.Checkbox(value=DEFAULT_FAST_MODE, label="Fast mode")
+        fast_mode = gr.Checkbox(value=INIT_FAST_MODE, label="Fast mode")
 
     with gr.Row():
         stable_preset_btn = gr.Button("Apply Stable Quality")
@@ -307,9 +350,9 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
     output_prompt = gr.Textbox(label="Final prompt")
 
     apply_model_btn.click(
-        fn=switch_model,
+        fn=switch_model_and_apply_preset,
         inputs=[model_selector],
-        outputs=[model_status],
+        outputs=[model_status, steps, guidance, resolution, quality_profile, fast_mode, negative_details],
     )
 
     stable_preset_btn.click(
