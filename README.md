@@ -152,6 +152,16 @@ python scripts/upload_to_hub.py \
   --folder_path /tmp/galicia_dataset
 ```
 
+If you are still confirming permissions/licenses for some sources, upload to a private repo first:
+
+```bash
+python scripts/upload_to_hub.py \
+  --repo_id "$HF_USERNAME/galicia-ethnography-dataset-private" \
+  --repo_type dataset \
+  --folder_path /tmp/galicia_dataset \
+  --private
+```
+
 ## 4) Train LoRA with DeepSpeed (FLUX script)
 
 Prepare env vars:
