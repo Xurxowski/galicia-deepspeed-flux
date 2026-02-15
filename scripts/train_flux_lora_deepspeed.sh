@@ -80,7 +80,13 @@ else
 fi
 
 accelerate launch \
-  --config_file "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2.yaml" \
+  --config_file "$(
+    if [[ "${MIXED_PRECISION}" == "fp16" ]]; then
+      echo "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2_fp16.yaml"
+    else
+      echo "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2.yaml"
+    fi
+  )" \
   "${TRAIN_SCRIPT}" \
   "${TRAIN_ARGS[@]}"
 

@@ -187,6 +187,10 @@ export INSTANCE_PROMPT="ethnographic photo of galician horreo or cruceiro, natur
 # export BASE_MODEL="black-forest-labs/FLUX.1-schnell"
 ```
 
+Important:
+- This training path requires **Linux + NVIDIA GPU (CUDA)**. `DeepSpeed` generally will not work on macOS.
+- For T4 GPUs, use `MIXED_PRECISION=fp16`.
+
 Run training:
 
 ```bash
@@ -201,6 +205,17 @@ python scripts/upload_to_hub.py \
   --repo_id "$HF_USERNAME/flux-schnell-galicia-lora" \
   --repo_type model \
   --folder_path "$OUTPUT_DIR"
+```
+
+### One-command: train + upload
+
+This wrapper sets a project-local output folder and uploads at the end:
+
+```bash
+export MODEL_REPO_ID="$HF_USERNAME/flux-schnell-galicia-lora"
+export DATASET_NAME="$HF_USERNAME/galicia-ethnography-dataset-private"
+export MIXED_PRECISION=fp16   # T4; use bf16 for A10/L4/A100
+bash scripts/train_and_upload_flux_lora.sh
 ```
 
 ## 5) Create and deploy the Space
@@ -248,6 +263,18 @@ python scripts/import_licensed_stock_manual.py \
   --source facebook_group_todos_horreos_galicia \
   --license_reference "fb-group-permission-2026-02-15"
 ```
+
+## 8) Use the LoRA in Draw Things (macOS)
+
+Once your model repo contains a `*.safetensors` LoRA (typically `pytorch_lora_weights.safetensors`), download it and copy into Draw Things Downloads:
+
+```bash
+python scripts/download_lora_for_drawthings.py \
+  --repo_id "$HF_USERNAME/flux-schnell-galicia-lora" \
+  --copy_to_drawthings_downloads
+```
+
+Then import it in Draw Things: LoRA -> Manage/Import -> Local file.
 
 Cruceiros:
 
