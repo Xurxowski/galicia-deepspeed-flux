@@ -35,6 +35,7 @@ Your laptop only needs this small project repository.
 - `scripts/collect_google_images_serpapi.py`: collect Google Images with SerpAPI.
 - `scripts/collect_wikimedia_commons.py`: collect from Wikimedia Commons.
 - `scripts/collect_pixabay_images.py`: collect from Pixabay API.
+- `scripts/collect_cruceirosdegalicia.py`: conservative collector for cruceirosdegalicia.xyz (requires explicit rights confirmation).
 - `scripts/import_licensed_stock_manual.py`: import manually licensed stock photos.
 - `scripts/build_imagefolder_dataset.py`: create `imagefolder` dataset format.
 - `scripts/upload_to_hub.py`: upload local folder to dataset/model/space repo.
@@ -109,6 +110,25 @@ python scripts/import_licensed_stock_manual.py \
   --source shutterstock \
   --license_reference "invoice-2026-02-15"
 ```
+
+### Option E (Cruceirosdegalicia.xyz, only with explicit permission)
+
+This site aggregates photos from many contributors. Use this only if you have explicit rights for ML training usage.
+Contact shown on site metadata: `cruceirosgalicia@gmail.com`.
+
+```bash
+python scripts/collect_cruceirosdegalicia.py \
+  --out_dir /tmp/galicia_raw \
+  --max_images 1500 \
+  --sleep_sec 0.8 \
+  --confirm_rights I_HAVE_PERMISSION
+```
+
+Recommended starting volume for cruceiros:
+- first round: 800-1500 photos
+- second round (if needed): up to 2500 photos
+
+You usually do not need all 38k photos for a good LoRA.
 
 ## 3) Build a dataset in Hugging Face imagefolder format
 
