@@ -17,11 +17,17 @@ Optional Space variables:
 
 The app auto-detects `BASE_MODEL` family:
 - `z-image` -> `ZImagePipeline`
-- otherwise -> `FluxPipeline`
+- `flux` -> `FluxPipeline`
+- other models -> `StableDiffusionPipeline`
 
 If `LORA_REPO` is not set, the app runs with base model only.
 
+UI features:
+- model selector + `Apply Model` button
+- quality profiles: `fast`, `balanced`, `quality`
+- negative prompt textbox (used for SD pipelines)
+
 Performance note:
 - current runtime is `cpu-basic`, so first load and high-resolution generations are slow.
-- use `Fast mode`, low steps, and `640` or `768` resolution for faster responses.
+- use `Fast mode`, low steps, and `512` or `640` resolution for faster responses.
 - if the selected base model exceeds CPU memory limits, the app auto-falls back to `CPU_FALLBACK_MODEL`.
