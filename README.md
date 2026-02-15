@@ -31,6 +31,7 @@ Your laptop only needs this small project repository.
 
 - `configs/deepspeed_zero2.json`: DeepSpeed ZeRO Stage 2 config.
 - `configs/accelerate_deepspeed_zero2.yaml`: Accelerate config wired to DeepSpeed.
+- `configs/concepts_galicia.json`: scalable concept map (tokens + captions) for multi-concept LoRA.
 - `scripts/collect_google_images_serpapi.py`: collect Google Images with SerpAPI.
 - `scripts/collect_wikimedia_commons.py`: collect from Wikimedia Commons.
 - `scripts/collect_pixabay_images.py`: collect from Pixabay API.
@@ -270,3 +271,58 @@ python scripts/upload_to_hub.py \
   --repo_type model \
   --folder_path /tmp/flux-galicia-lora-cruceiro
 ```
+
+## 8) Single LoRA with Differentiated Concepts (Scalable)
+
+If you prefer one LoRA with clearly separated concepts (`horreo`, `cruceiro`, and future `muino`), use concept tokens and per-image captions.
+
+### A) Put images by label folder
+
+```text
+/tmp/galicia_raw/
+  horreo/*.jpg
+  cruceiro/*.jpg
+  muino/*.jpg   # optional for future
+```
+
+### B) Build multi-concept dataset with concept tokens
+
+```bash
+python scripts/build_imagefolder_dataset.py \
+  --raw_dir /tmp/galicia_raw \
+  --dataset_dir /tmp/galicia_dataset_multiconcept \
+  --val_ratio 0.1 \
+  --concepts_file configs/concepts_galicia.json \
+  --use_concept_tokens \
+  --include_labels horreo cruceiro
+```
+
+You can later add `muino` by adding images to `raw_dir/muino` and including it:
+
+```bash
+python scripts/build_imagefolder_dataset.py \
+  --raw_dir /tmp/galicia_raw \
+  --dataset_dir /tmp/galicia_dataset_multiconcept \
+  --val_ratio 0.1 \
+  --concepts_file configs/concepts_galicia.json \
+  --use_concept_tokens \
+  --include_labels horreo cruceiro muino
+```
+
+### C) Train single multi-concept LoRA using caption column
+
+```bash
+export DATASET_NAME=/tmp/galicia_dataset_multiconcept/train
+export IMAGE_COLUMN=image
+export CAPTION_COLUMN=text
+export OUTPUT_DIR=/tmp/flux-galicia-lora-multiconcept
+export INSTANCE_PROMPT=\"ethnographic photo of galician traditional architecture\"
+bash scripts/train_flux_lora_deepspeed.sh
+```
+
+### D) Prompting with concept tokens
+
+Use the concept token in generation prompts for stronger separation:
+- `horreo`: `<gal_horreo>`
+- `cruceiro`: `<gal_cruceiro>`
+- `muino`: `<gal_muino>`

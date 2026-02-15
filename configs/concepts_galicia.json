@@ -1,0 +1,18 @@
+{
+  "profile_name": "galicia_multiconcept_v1",
+  "notes": "Add new labels here (e.g. lavadero, pazo, alpendre) with token + caption.",
+  "labels": {
+    "horreo": {
+      "token": "<gal_horreo>",
+      "caption": "ethnographic documentary photo of a traditional galician horreo, raised granary on stone pillars (pegollos), elongated slatted chamber, rural Galicia, no modern house"
+    },
+    "cruceiro": {
+      "token": "<gal_cruceiro>",
+      "caption": "ethnographic documentary photo of a galician cruceiro, carved granite cross on stone pedestal, historic village context, rural Galicia, no modern sculpture"
+    },
+    "muino": {
+      "token": "<gal_muino>",
+      "caption": "ethnographic documentary photo of a traditional galician muino (water mill), stone millhouse near a stream, moss and granite textures, rural Galicia"
+    }
+  }
+}

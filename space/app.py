@@ -12,6 +12,9 @@ BASE_MODEL = os.getenv("BASE_MODEL", "Tongyi-MAI/Z-Image-Turbo")
 CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "stabilityai/sd-turbo")
 LORA_REPO = os.getenv("LORA_REPO", "")
 LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors")
+TOKEN_HORREO = os.getenv("TOKEN_HORREO", "<gal_horreo>")
+TOKEN_CRUCEIRO = os.getenv("TOKEN_CRUCEIRO", "<gal_cruceiro>")
+TOKEN_MUINO = os.getenv("TOKEN_MUINO", "<gal_muino>")
 
 MODEL_CHOICES = [
     "Tongyi-MAI/Z-Image-Turbo",
@@ -140,9 +143,12 @@ def switch_model(target_model: str) -> str:
 
 def build_prompt(subject: str, details: str) -> str:
     subject_map = {
-        "horreo": "galician horreo",
-        "cruceiro": "galician cruceiro",
-        "mixed": "galician ethnographic scene with horreo and cruceiro",
+        "horreo": f"{TOKEN_HORREO} galician horreo, raised granary on stone pillars (pegollos)",
+        "cruceiro": f"{TOKEN_CRUCEIRO} galician cruceiro, carved granite cross on stone pedestal",
+        "muino": f"{TOKEN_MUINO} galician muino (water mill), stone millhouse near stream",
+        "mixed": (
+            f"{TOKEN_HORREO} and {TOKEN_CRUCEIRO} in a galician ethnographic scene"
+        ),
     }
     base = subject_map.get(subject, subject)
     return (
@@ -242,7 +248,7 @@ switch_model(BASE_MODEL)
 with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
     gr.Markdown(
         "# Galicia Ethnography Generator\n"
-        "Generate images of **horreos** and **cruceiros** and switch models from the UI."
+        "Generate images of **horreos**, **cruceiros** and **muinos** and switch models from the UI."
     )
 
     with gr.Row():
@@ -261,7 +267,7 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
 
     with gr.Row():
         subject = gr.Dropdown(
-            choices=["horreo", "cruceiro", "mixed"],
+            choices=["horreo", "cruceiro", "muino", "mixed"],
             value="horreo",
             label="Subject",
         )

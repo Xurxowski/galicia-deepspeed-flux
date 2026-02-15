@@ -79,6 +79,21 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Optional max images per label (0 = no limit)",
     )
+    parser.add_argument(
+        "--concepts_file",
+        default=None,
+        help="Optional JSON file with per-label captions/tokens for scalable multi-concept training",
+    )
+    parser.add_argument(
+        "--use_concept_tokens",
+        action="store_true",
+        help="Prepend concept token to caption when available",
+    )
+    parser.add_argument(
+        "--strict_concepts",
+        action="store_true",
+        help="Fail if a label does not exist in concepts file",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +103,61 @@ def list_images(folder: Path) -> list[Path]:
 
 def ensure_clean_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def load_concepts(path: Path) -> dict[str, dict[str, str]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "labels" in data and isinstance(data["labels"], dict):
+        labels_obj = data["labels"]
+    elif isinstance(data, dict):
+        labels_obj = data
+    else:
+        raise ValueError(f"Invalid concepts file format: {path}")
+
+    concepts: dict[str, dict[str, str]] = {}
+    for raw_label, raw_cfg in labels_obj.items():
+        label = str(raw_label).lower()
+        if isinstance(raw_cfg, str):
+            concepts[label] = {"caption": raw_cfg, "token": ""}
+            continue
+        if not isinstance(raw_cfg, dict):
+            continue
+        caption = str(raw_cfg.get("caption", "")).strip()
+        token = str(raw_cfg.get("token", "")).strip()
+        concepts[label] = {"caption": caption, "token": token}
+    return concepts
+
+
+def build_caption_map(
+    labels: set[str],
+    *,
+    caption_profile: str,
+    concepts_file: str | None,
+    use_concept_tokens: bool,
+    strict_concepts: bool,
+) -> tuple[dict[str, str], dict[str, str]]:
+    captions = dict(CAPTION_PROFILES[caption_profile])
+    tokens: dict[str, str] = {}
+
+    if concepts_file:
+        concepts = load_concepts(Path(concepts_file))
+        missing: list[str] = []
+        for label in labels:
+            cfg = concepts.get(label)
+            if cfg is None:
+                if strict_concepts:
+                    missing.append(label)
+                continue
+            caption = cfg.get("caption", "").strip() or captions.get(label, label)
+            token = cfg.get("token", "").strip()
+            if use_concept_tokens and token and token not in caption:
+                caption = f"{token} {caption}".strip()
+            captions[label] = caption
+            tokens[label] = token
+        if missing:
+            raise SystemExit(f"Missing labels in concepts file: {', '.join(sorted(missing))}")
+
+    return captions, tokens
 
 
 def write_split(items: list[tuple[Path, str]], split_dir: Path, captions: dict[str, str]) -> None:
@@ -111,7 +181,6 @@ def main() -> None:
     dataset_root = Path(args.dataset_dir)
     train_dir = dataset_root / "train"
     val_dir = dataset_root / "validation"
-    captions = CAPTION_PROFILES[args.caption_profile]
     include_labels = set(l.lower() for l in args.include_labels) if args.include_labels else None
     exclude_labels = set(l.lower() for l in args.exclude_labels)
 
@@ -142,6 +211,15 @@ def main() -> None:
     if not all_items:
         raise SystemExit(f"No images found in {raw_root}")
 
+    labels_in_dataset = set(counts_by_label.keys())
+    captions, tokens = build_caption_map(
+        labels_in_dataset,
+        caption_profile=args.caption_profile,
+        concepts_file=args.concepts_file,
+        use_concept_tokens=args.use_concept_tokens,
+        strict_concepts=args.strict_concepts,
+    )
+
     random.shuffle(all_items)
     val_count = int(len(all_items) * args.val_ratio)
     val_items = all_items[:val_count]
@@ -158,6 +236,7 @@ def main() -> None:
                 "validation_count": len(val_items),
                 "caption_profile": args.caption_profile,
                 "labels": counts_by_label,
+                "concept_tokens": tokens,
             },
             indent=2,
         )

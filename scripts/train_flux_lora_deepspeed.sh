@@ -5,8 +5,11 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BASE_MODEL="${BASE_MODEL:-black-forest-labs/FLUX.1-schnell}"
 DATA_DIR="${DATA_DIR:-/tmp/galicia_dataset/train}"
+DATASET_NAME="${DATASET_NAME:-}"
+IMAGE_COLUMN="${IMAGE_COLUMN:-image}"
+CAPTION_COLUMN="${CAPTION_COLUMN:-text}"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/flux-galicia-lora}"
-INSTANCE_PROMPT="${INSTANCE_PROMPT:-ethnographic photo of galician horreo or cruceiro, natural light}"
+INSTANCE_PROMPT="${INSTANCE_PROMPT:-ethnographic photo of galician architecture and monuments}"
 BASE_MODEL_LOWER="$(echo "${BASE_MODEL}" | tr '[:upper:]' '[:lower:]')"
 
 RANK="${RANK:-16}"
@@ -42,23 +45,42 @@ python -m pip install -e "${DIFFUSERS_DIR}"
 
 mkdir -p "${OUTPUT_DIR}"
 
+TRAIN_ARGS=(
+  --pretrained_model_name_or_path "${BASE_MODEL}"
+  --output_dir "${OUTPUT_DIR}"
+  --instance_prompt "${INSTANCE_PROMPT}"
+  --resolution "${RESOLUTION}"
+  --train_batch_size "${TRAIN_BATCH_SIZE}"
+  --gradient_accumulation_steps "${GRAD_ACC}"
+  --learning_rate "${LEARNING_RATE}"
+  --lr_scheduler constant
+  --lr_warmup_steps 0
+  --rank "${RANK}"
+  --max_train_steps "${MAX_TRAIN_STEPS}"
+  --checkpointing_steps "${CHECKPOINTING_STEPS}"
+  --mixed_precision bf16
+  --seed "${SEED}"
+)
+
+if [[ -n "${DATASET_NAME}" ]]; then
+  echo "Using dataset_name mode with captions:"
+  echo "  DATASET_NAME=${DATASET_NAME}"
+  echo "  IMAGE_COLUMN=${IMAGE_COLUMN}"
+  echo "  CAPTION_COLUMN=${CAPTION_COLUMN}"
+  TRAIN_ARGS+=(
+    --dataset_name "${DATASET_NAME}"
+    --image_column "${IMAGE_COLUMN}"
+    --caption_column "${CAPTION_COLUMN}"
+  )
+else
+  echo "Using instance_data_dir mode:"
+  echo "  DATA_DIR=${DATA_DIR}"
+  TRAIN_ARGS+=(--instance_data_dir "${DATA_DIR}")
+fi
+
 accelerate launch \
   --config_file "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2.yaml" \
   "${TRAIN_SCRIPT}" \
-  --pretrained_model_name_or_path "${BASE_MODEL}" \
-  --instance_data_dir "${DATA_DIR}" \
-  --output_dir "${OUTPUT_DIR}" \
-  --instance_prompt "${INSTANCE_PROMPT}" \
-  --resolution "${RESOLUTION}" \
-  --train_batch_size "${TRAIN_BATCH_SIZE}" \
-  --gradient_accumulation_steps "${GRAD_ACC}" \
-  --learning_rate "${LEARNING_RATE}" \
-  --lr_scheduler constant \
-  --lr_warmup_steps 0 \
-  --rank "${RANK}" \
-  --max_train_steps "${MAX_TRAIN_STEPS}" \
-  --checkpointing_steps "${CHECKPOINTING_STEPS}" \
-  --mixed_precision bf16 \
-  --seed "${SEED}"
+  "${TRAIN_ARGS[@]}"
 
 echo "Training finished. Artifacts at: ${OUTPUT_DIR}"

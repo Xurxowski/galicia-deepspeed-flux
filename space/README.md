@@ -8,12 +8,16 @@ pinned: false
 Space focused on Galicia ethnographic elements:
 - horreos
 - cruceiros
+- muinos
 
 Optional Space variables:
 - `BASE_MODEL`: defaults to `Tongyi-MAI/Z-Image-Turbo`
 - `CPU_FALLBACK_MODEL`: defaults to `stabilityai/sd-turbo`
 - `LORA_REPO`: your LoRA model repo (example: `username/flux-schnell-galicia-lora`)
 - `LORA_WEIGHT_NAME`: LoRA file name (default: `pytorch_lora_weights.safetensors`)
+- `TOKEN_HORREO`: defaults to `<gal_horreo>`
+- `TOKEN_CRUCEIRO`: defaults to `<gal_cruceiro>`
+- `TOKEN_MUINO`: defaults to `<gal_muino>`
 
 The app auto-detects `BASE_MODEL` family:
 - `z-image` -> `ZImagePipeline`
