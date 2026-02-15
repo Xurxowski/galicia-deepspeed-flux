@@ -21,6 +21,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--folder_path", required=True, help="Local folder to upload")
     parser.add_argument("--token", default=None, help="HF token (or use HF_TOKEN env var)")
+    parser.add_argument(
+        "--private",
+        action="store_true",
+        help="Create the repo as private (recommended when licensing/permissions are not yet confirmed)",
+    )
     parser.add_argument("--commit_message", default="Upload from galicia-deepspeed-flux", help="Commit message")
     return parser.parse_args()
 
@@ -36,7 +41,7 @@ def main() -> None:
         raise SystemExit(f"Folder not found: {folder}")
 
     api = HfApi(token=token)
-    api.create_repo(repo_id=args.repo_id, repo_type=args.repo_type, exist_ok=True)
+    api.create_repo(repo_id=args.repo_id, repo_type=args.repo_type, private=args.private, exist_ok=True)
 
     api.upload_folder(
         repo_id=args.repo_id,
