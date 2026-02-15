@@ -20,6 +20,7 @@ LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-1200}"
 CHECKPOINTING_STEPS="${CHECKPOINTING_STEPS:-200}"
 SEED="${SEED:-42}"
+MIXED_PRECISION="${MIXED_PRECISION:-bf16}"   # set fp16 for T4; bf16 for A10/L4/A100 etc.
 
 DIFFUSERS_DIR="${DIFFUSERS_DIR:-/tmp/diffusers}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-${DIFFUSERS_DIR}/examples/dreambooth/train_dreambooth_lora_flux.py}"
@@ -58,7 +59,7 @@ TRAIN_ARGS=(
   --rank "${RANK}"
   --max_train_steps "${MAX_TRAIN_STEPS}"
   --checkpointing_steps "${CHECKPOINTING_STEPS}"
-  --mixed_precision bf16
+  --mixed_precision "${MIXED_PRECISION}"
   --seed "${SEED}"
 )
 
