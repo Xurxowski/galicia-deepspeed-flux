@@ -22,10 +22,16 @@ MODEL_CHOICES = [
 
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DEFAULT_STEPS = 6 if torch.cuda.is_available() else 2
-DEFAULT_RESOLUTION = 1024 if torch.cuda.is_available() else 512
-DEFAULT_FAST_MODE = not torch.cuda.is_available()
-DEFAULT_QUALITY = "balanced" if torch.cuda.is_available() else "fast"
+STABLE_STEPS = 8
+STABLE_GUIDANCE = 6.0
+STABLE_RESOLUTION = 640
+STABLE_FAST_MODE = False
+STABLE_QUALITY = "stable"
+DEFAULT_STEPS = STABLE_STEPS
+DEFAULT_RESOLUTION = STABLE_RESOLUTION
+DEFAULT_FAST_MODE = STABLE_FAST_MODE
+DEFAULT_QUALITY = STABLE_QUALITY
+DEFAULT_NEGATIVE = "blurry, low quality, watermark, text, logo, deformed"
 
 pipe = None
 pipeline_kind = ""
@@ -154,7 +160,10 @@ def apply_quality_profile(steps: int, resolution: int, quality_profile: str, fas
     current_steps = steps
     current_res = resolution
 
-    if quality_profile == "fast":
+    if quality_profile == "stable":
+        current_steps = max(current_steps, STABLE_STEPS)
+        current_res = max(current_res, STABLE_RESOLUTION)
+    elif quality_profile == "fast":
         current_steps = min(current_steps, 3)
         current_res = min(current_res, 640)
     elif quality_profile == "balanced":
@@ -169,6 +178,17 @@ def apply_quality_profile(steps: int, resolution: int, quality_profile: str, fas
         current_res = min(current_res, 640)
 
     return current_steps, current_res
+
+
+def apply_stable_preset():
+    return (
+        STABLE_STEPS,
+        STABLE_GUIDANCE,
+        STABLE_RESOLUTION,
+        STABLE_QUALITY,
+        STABLE_FAST_MODE,
+        DEFAULT_NEGATIVE,
+    )
 
 
 def generate(
@@ -234,6 +254,9 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         apply_model_btn = gr.Button("Apply Model")
 
     model_status = gr.Markdown(_status_text())
+    gr.Markdown(
+        "Preset fijo activo: `Calidad estable` (steps 8, guidance 6.0, resolution 640, fast mode OFF)."
+    )
     gr.Markdown("Tip: on `cpu-basic`, large models are auto-fallback to lightweight CPU model.")
 
     with gr.Row():
@@ -248,25 +271,27 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         )
 
     negative_details = gr.Textbox(
-        value="blurry, low quality, watermark, text, logo, deformed",
+        value=DEFAULT_NEGATIVE,
         label="Negative prompt (for SD pipelines)",
     )
 
     with gr.Row():
         seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Seed")
         steps = gr.Slider(minimum=1, maximum=60, value=DEFAULT_STEPS, step=1, label="Steps")
-        guidance = gr.Slider(minimum=0.0, maximum=12.0, value=1.0, step=0.1, label="Guidance")
+        guidance = gr.Slider(minimum=0.0, maximum=12.0, value=STABLE_GUIDANCE, step=0.1, label="Guidance")
         resolution = gr.Slider(minimum=512, maximum=1024, value=DEFAULT_RESOLUTION, step=64, label="Resolution")
 
     with gr.Row():
         quality_profile = gr.Dropdown(
-            choices=["fast", "balanced", "quality"],
+            choices=["stable", "fast", "balanced", "quality"],
             value=DEFAULT_QUALITY,
             label="Quality profile",
         )
         fast_mode = gr.Checkbox(value=DEFAULT_FAST_MODE, label="Fast mode")
 
-    run_btn = gr.Button("Generate")
+    with gr.Row():
+        stable_preset_btn = gr.Button("Apply Stable Quality")
+        run_btn = gr.Button("Generate")
     output_image = gr.Image(label="Result", type="pil")
     output_prompt = gr.Textbox(label="Final prompt")
 
@@ -274,6 +299,12 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         fn=switch_model,
         inputs=[model_selector],
         outputs=[model_status],
+    )
+
+    stable_preset_btn.click(
+        fn=apply_stable_preset,
+        inputs=[],
+        outputs=[steps, guidance, resolution, quality_profile, fast_mode, negative_details],
     )
 
     run_btn.click(

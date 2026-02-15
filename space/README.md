@@ -24,7 +24,8 @@ If `LORA_REPO` is not set, the app runs with base model only.
 
 UI features:
 - model selector + `Apply Model` button
-- quality profiles: `fast`, `balanced`, `quality`
+- stable preset button: `Apply Stable Quality`
+- quality profiles: `stable`, `fast`, `balanced`, `quality`
 - negative prompt textbox (used for SD pipelines)
 
 Performance note:
