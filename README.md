@@ -20,6 +20,9 @@ Your laptop only needs this small project repository.
 
 - Google Images content may be copyrighted. Use license filters and verify usage rights before training.
 - For safer/legal sourcing, this project includes a Wikimedia collector script.
+- Stock sites (Shutterstock/Adobe Stock/Dreamstime) typically require paid licenses and manual download workflows.
+- This repo includes a manual stock import script for already-licensed assets.
+- This repo includes a Pixabay API collector for free-license images.
 - `DeepSpeed` accelerates distributed training, but training still needs GPU resources.
 - Hugging Face ZeroGPU is suitable for inference demos, not heavy training jobs.
 - According to Tongyi-MAI model docs, `Z-Image-Turbo` is designed for fast inference, not fine-tuning.
@@ -30,6 +33,8 @@ Your laptop only needs this small project repository.
 - `configs/accelerate_deepspeed_zero2.yaml`: Accelerate config wired to DeepSpeed.
 - `scripts/collect_google_images_serpapi.py`: collect Google Images with SerpAPI.
 - `scripts/collect_wikimedia_commons.py`: collect from Wikimedia Commons.
+- `scripts/collect_pixabay_images.py`: collect from Pixabay API.
+- `scripts/import_licensed_stock_manual.py`: import manually licensed stock photos.
 - `scripts/build_imagefolder_dataset.py`: create `imagefolder` dataset format.
 - `scripts/upload_to_hub.py`: upload local folder to dataset/model/space repo.
 - `scripts/train_flux_lora_deepspeed.sh`: launch FLUX LoRA training with DeepSpeed.
@@ -53,6 +58,7 @@ Set credentials:
 export HF_TOKEN="hf_..."
 export HF_USERNAME="your_hf_username"
 export SERPAPI_API_KEY="..."   # only for Google image collection
+export PIXABAY_API_KEY="..."   # only for Pixabay collection
 ```
 
 Login once:
@@ -81,13 +87,37 @@ python scripts/collect_wikimedia_commons.py \
   --queries "horreo galicia" "cruceiro galicia"
 ```
 
+### Option C (Pixabay API, free-license workflow)
+
+```bash
+python scripts/collect_pixabay_images.py \
+  --out_dir /tmp/galicia_raw \
+  --per_query 200 \
+  --queries "horreo gallego" "horreo galicia"
+```
+
+### Option D (Licensed stock photos, manual import)
+
+Download assets manually from your licensed account first, then import:
+
+```bash
+python scripts/import_licensed_stock_manual.py \
+  --input_dir /tmp/stock_downloads/horreos \
+  --out_dir /tmp/galicia_raw \
+  --label horreo \
+  --source shutterstock \
+  --license_reference "invoice-2026-02-15"
+```
+
 ## 3) Build a dataset in Hugging Face imagefolder format
 
 ```bash
 python scripts/build_imagefolder_dataset.py \
   --raw_dir /tmp/galicia_raw \
   --dataset_dir /tmp/galicia_dataset \
-  --val_ratio 0.1
+  --val_ratio 0.1 \
+  --caption_profile horreo_focus \
+  --include_labels horreo
 ```
 
 Upload dataset:
