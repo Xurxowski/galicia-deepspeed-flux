@@ -12,6 +12,7 @@ BASE_MODEL = os.getenv("BASE_MODEL", "Tongyi-MAI/Z-Image-Turbo")
 CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "stabilityai/sd-turbo")
 LORA_REPO = os.getenv("LORA_REPO", "")
 LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors")
+LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux | z-image | both/auto
 TOKEN_HORREO = os.getenv("TOKEN_HORREO", "<gal_horreo>")
 TOKEN_CRUCEIRO = os.getenv("TOKEN_CRUCEIRO", "<gal_cruceiro>")
 TOKEN_MUINO = os.getenv("TOKEN_MUINO", "<gal_muino>")
@@ -56,6 +57,10 @@ def _try_load_lora(current_pipe, kind: str) -> str:
         return ""
     if kind not in {"z-image", "flux"}:
         return f"LoRA ignored for pipeline `{kind}`."
+    if LORA_TARGET in {"flux", "flux-only"} and kind != "flux":
+        return "LoRA configured for `flux`; ignored for `z-image`."
+    if LORA_TARGET in {"z-image", "zimage", "z-image-only"} and kind != "z-image":
+        return "LoRA configured for `z-image`; ignored for `flux`."
     try:
         current_pipe.load_lora_weights(LORA_REPO, weight_name=LORA_WEIGHT_NAME)
         return f"LoRA loaded from `{LORA_REPO}`."
