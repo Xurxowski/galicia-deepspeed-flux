@@ -7,7 +7,7 @@ import argparse
 import os
 from pathlib import Path
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, get_token
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,9 +27,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    token = args.token or os.getenv("HF_TOKEN")
+    token = args.token or os.getenv("HF_TOKEN") or get_token()
     if not token:
-        raise SystemExit("Missing HF token. Use --token or HF_TOKEN env var.")
+        raise SystemExit("Missing HF token. Run `hf auth login` or use --token/HF_TOKEN.")
 
     folder = Path(args.folder_path)
     if not folder.exists() or not folder.is_dir():
