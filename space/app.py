@@ -13,6 +13,9 @@ LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "pytorch_lora_weights.safetenso
 
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEFAULT_STEPS = 6 if torch.cuda.is_available() else 3
+DEFAULT_RESOLUTION = 1024 if torch.cuda.is_available() else 640
+DEFAULT_FAST_MODE = not torch.cuda.is_available()
 
 def load_pipeline(base_model: str):
     lower = base_model.lower()
@@ -33,6 +36,9 @@ if LORA_REPO:
 if torch.cuda.is_available():
     pipe.enable_model_cpu_offload()
 
+if hasattr(pipe, "set_progress_bar_config"):
+    pipe.set_progress_bar_config(disable=True)
+
 
 def build_prompt(subject: str, details: str) -> str:
     subject_map = {
@@ -47,19 +53,36 @@ def build_prompt(subject: str, details: str) -> str:
     )
 
 
-def generate(subject: str, details: str, seed: int, steps: int, guidance: float):
+def normalize_resolution(resolution: int) -> int:
+    clamped = max(512, min(1024, resolution))
+    return (clamped // 64) * 64
+
+
+def generate(
+    subject: str,
+    details: str,
+    seed: int,
+    steps: int,
+    guidance: float,
+    resolution: int,
+    fast_mode: bool,
+):
     prompt = build_prompt(subject, details)
     generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
+    use_steps = min(steps, 4) if fast_mode else steps
+    use_resolution = min(normalize_resolution(resolution), 768) if fast_mode else normalize_resolution(resolution)
+    use_seq_len = 128 if fast_mode else 256
 
-    image = pipe(
-        prompt=prompt,
-        num_inference_steps=steps,
-        guidance_scale=guidance,
-        height=1024,
-        width=1024,
-        max_sequence_length=256,
-        generator=generator,
-    ).images[0]
+    with torch.inference_mode():
+        image = pipe(
+            prompt=prompt,
+            num_inference_steps=use_steps,
+            guidance_scale=guidance,
+            height=use_resolution,
+            width=use_resolution,
+            max_sequence_length=use_seq_len,
+            generator=generator,
+        ).images[0]
 
     return image, prompt
 
@@ -70,6 +93,7 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         "Generate images of **horreos** and **cruceiros** using Z-Image-Turbo or FLUX + your LoRA."
     )
     gr.Markdown(f"Loaded model: `{BASE_MODEL}` (`{pipeline_kind}` pipeline)")
+    gr.Markdown("Tip: on `cpu-basic`, keep `Fast mode` enabled for lower latency.")
 
     with gr.Row():
         subject = gr.Dropdown(
@@ -84,8 +108,10 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
 
     with gr.Row():
         seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Seed")
-        steps = gr.Slider(minimum=1, maximum=50, value=9, step=1, label="Steps")
+        steps = gr.Slider(minimum=1, maximum=50, value=DEFAULT_STEPS, step=1, label="Steps")
         guidance = gr.Slider(minimum=0.0, maximum=8.0, value=0.0, step=0.1, label="Guidance")
+        resolution = gr.Slider(minimum=512, maximum=1024, value=DEFAULT_RESOLUTION, step=64, label="Resolution")
+        fast_mode = gr.Checkbox(value=DEFAULT_FAST_MODE, label="Fast mode")
 
     run_btn = gr.Button("Generate")
     output_image = gr.Image(label="Result", type="pil")
@@ -93,7 +119,7 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
 
     run_btn.click(
         fn=generate,
-        inputs=[subject, details, seed, steps, guidance],
+        inputs=[subject, details, seed, steps, guidance, resolution, fast_mode],
         outputs=[output_image, output_prompt],
     )
 

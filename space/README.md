@@ -19,3 +19,7 @@ The app auto-detects `BASE_MODEL` family:
 - otherwise -> `FluxPipeline`
 
 If `LORA_REPO` is not set, the app runs with base model only.
+
+Performance note:
+- current runtime is `cpu-basic`, so first load and high-resolution generations are slow.
+- use `Fast mode`, low steps, and `640` or `768` resolution for faster responses.
