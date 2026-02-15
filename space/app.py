@@ -16,6 +16,9 @@ GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DEFAULT_STEPS = 6 if torch.cuda.is_available() else 3
 DEFAULT_RESOLUTION = 1024 if torch.cuda.is_available() else 640
 DEFAULT_FAST_MODE = not torch.cuda.is_available()
+if not torch.cuda.is_available():
+    DEFAULT_STEPS = 2
+    DEFAULT_RESOLUTION = 512
 
 def load_pipeline(base_model: str):
     lower = base_model.lower()
@@ -69,8 +72,8 @@ def generate(
 ):
     prompt = build_prompt(subject, details)
     generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
-    use_steps = min(steps, 4) if fast_mode else steps
-    use_resolution = min(normalize_resolution(resolution), 768) if fast_mode else normalize_resolution(resolution)
+    use_steps = min(steps, 3) if fast_mode else steps
+    use_resolution = min(normalize_resolution(resolution), 640) if fast_mode else normalize_resolution(resolution)
     use_seq_len = 128 if fast_mode else 256
 
     with torch.inference_mode():
