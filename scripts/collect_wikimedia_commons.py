@@ -37,6 +37,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out_dir", required=True, help="Output root directory")
     parser.add_argument("--per_query", type=int, default=120, help="Target images per query")
     parser.add_argument("--max_requests", type=int, default=20, help="Max API calls per query")
+    parser.add_argument(
+        "--thumb_width",
+        type=int,
+        default=1024,
+        help="Download Commons thumbnails at this width (0 = original file URL)",
+    )
     parser.add_argument("--min_side", type=int, default=512, help="Minimum width/height")
     parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout")
     parser.add_argument("--sleep_sec", type=float, default=0.4, help="Pause between API calls")
@@ -59,7 +65,13 @@ def ext_from_url(url: str) -> str:
     return ".jpg"
 
 
-def commons_search(query: str, timeout: float, continuation: dict[str, Any] | None = None) -> dict[str, Any]:
+def commons_search(
+    query: str,
+    timeout: float,
+    *,
+    thumb_width: int,
+    continuation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     params: dict[str, Any] = {
         "action": "query",
         "format": "json",
@@ -72,6 +84,8 @@ def commons_search(query: str, timeout: float, continuation: dict[str, Any] | No
         "iiprop": "url|extmetadata",
         "iiextmetadatafilter": "LicenseShortName|LicenseUrl|UsageTerms|Attribution|Artist|Credit|ImageDescription",
     }
+    if thumb_width > 0:
+        params["iiurlwidth"] = int(thumb_width)
     if continuation:
         params.update(continuation)
 
@@ -95,6 +109,9 @@ def iter_image_items(payload: dict[str, Any]):
             if isinstance(url, str) and url.startswith("http"):
                 yield {
                     "url": url,
+                    "thumburl": item.get("thumburl"),
+                    "thumbwidth": item.get("thumbwidth"),
+                    "thumbheight": item.get("thumbheight"),
                     "descriptionurl": item.get("descriptionurl"),
                     "extmetadata": item.get("extmetadata", {}),
                     "title": title,
@@ -142,7 +159,12 @@ def main() -> None:
             if saved >= args.per_query:
                 break
 
-            payload = commons_search(query=query, timeout=args.timeout, continuation=continuation)
+            payload = commons_search(
+                query=query,
+                timeout=args.timeout,
+                thumb_width=args.thumb_width,
+                continuation=continuation,
+            )
             items = list(iter_image_items(payload))
             if not items:
                 break
@@ -150,18 +172,23 @@ def main() -> None:
             for item in tqdm(items, desc=f"{query}", leave=False):
                 if saved >= args.per_query:
                     break
-                url = item.get("url")
-                if not isinstance(url, str):
+                original_url = item.get("url")
+                if not isinstance(original_url, str):
                     continue
-                if url in seen:
-                    continue
-                seen.add(url)
 
-                image = download_and_validate(url=url, timeout=args.timeout, min_side=args.min_side)
+                download_url = item.get("thumburl") if args.thumb_width > 0 else None
+                if not isinstance(download_url, str) or not download_url.startswith("http"):
+                    download_url = original_url
+
+                if original_url in seen:
+                    continue
+                seen.add(original_url)
+
+                image = download_and_validate(url=download_url, timeout=args.timeout, min_side=args.min_side)
                 if image is None:
                     continue
 
-                filename = f"wikimedia_{safe_stem(url)}{ext_from_url(url)}"
+                filename = f"wikimedia_{safe_stem(original_url)}{ext_from_url(download_url)}"
                 out_path = label_dir / filename
                 if out_path.exists():
                     continue
@@ -178,7 +205,10 @@ def main() -> None:
                     "title": item.get("title"),
                     "pageid": item.get("pageid"),
                     "description_url": item.get("descriptionurl"),
-                    "image_url": url,
+                    "image_url": original_url,
+                    "download_url": download_url,
+                    "thumbwidth": item.get("thumbwidth"),
+                    "thumbheight": item.get("thumbheight"),
                     "license_short_name": (ext.get("LicenseShortName") or {}).get("value"),
                     "license_url": (ext.get("LicenseUrl") or {}).get("value"),
                     "usage_terms": (ext.get("UsageTerms") or {}).get("value"),
