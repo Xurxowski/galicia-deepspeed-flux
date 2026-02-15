@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
 
 def label_from_query(query: str) -> str:
     q = query.lower()
-    if "cruce" in q:
+    if any(token in q for token in ("cruce", "cross", "wayside")):
         return "cruceiro"
     return "horreo"
 
