@@ -161,7 +161,7 @@ def main() -> None:
                 if image is None:
                     continue
 
-                filename = f"{safe_stem(url)}{ext_from_url(url)}"
+                filename = f"wikimedia_{safe_stem(url)}{ext_from_url(url)}"
                 out_path = label_dir / filename
                 if out_path.exists():
                     continue
