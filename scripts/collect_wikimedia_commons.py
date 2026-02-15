@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
         default=["horreo galicia", "cruceiro galicia"],
         help="Commons search queries",
     )
+    parser.add_argument(
+        "--categories",
+        nargs="+",
+        default=[],
+        help="Commons categories to crawl (example: 'Category:H\u00f3rreos in Galicia')",
+    )
     parser.add_argument("--out_dir", required=True, help="Output root directory")
     parser.add_argument("--per_query", type=int, default=120, help="Target images per query")
     parser.add_argument("--max_requests", type=int, default=20, help="Max API calls per query")
@@ -80,6 +86,44 @@ def commons_search(
         "gsrsearch": query,
         "gsrnamespace": 6,
         "gsrlimit": 50,
+        "prop": "imageinfo",
+        "iiprop": "url|extmetadata",
+        "iiextmetadatafilter": "LicenseShortName|LicenseUrl|UsageTerms|Attribution|Artist|Credit|ImageDescription",
+    }
+    if thumb_width > 0:
+        params["iiurlwidth"] = int(thumb_width)
+    if continuation:
+        params.update(continuation)
+
+    response = requests.get(
+        COMMONS_API,
+        params=params,
+        timeout=timeout,
+        headers={"User-Agent": USER_AGENT},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def commons_categorymembers(
+    category: str,
+    timeout: float,
+    *,
+    thumb_width: int,
+    continuation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    title = category.strip()
+    if not title.lower().startswith("category:"):
+        title = f"Category:{title}"
+
+    params: dict[str, Any] = {
+        "action": "query",
+        "format": "json",
+        "formatversion": 2,
+        "generator": "categorymembers",
+        "gcmtitle": title,
+        "gcmnamespace": 6,
+        "gcmlimit": 50,
         "prop": "imageinfo",
         "iiprop": "url|extmetadata",
         "iiextmetadatafilter": "LicenseShortName|LicenseUrl|UsageTerms|Attribution|Artist|Credit|ImageDescription",
@@ -146,7 +190,12 @@ def main() -> None:
     source_log = root / "sources_wikimedia_commons.jsonl"
     summary: dict[str, int] = {}
 
-    for query in args.queries:
+    work_items: list[tuple[str, str]] = []
+    # categories first (more precise), then free-text search queries
+    work_items.extend((c, "category") for c in args.categories)
+    work_items.extend((q, "search") for q in args.queries)
+
+    for query, mode in work_items:
         label = label_from_query(query)
         label_dir = root / label
         label_dir.mkdir(parents=True, exist_ok=True)
@@ -159,12 +208,20 @@ def main() -> None:
             if saved >= args.per_query:
                 break
 
-            payload = commons_search(
-                query=query,
-                timeout=args.timeout,
-                thumb_width=args.thumb_width,
-                continuation=continuation,
-            )
+            if mode == "category":
+                payload = commons_categorymembers(
+                    category=query,
+                    timeout=args.timeout,
+                    thumb_width=args.thumb_width,
+                    continuation=continuation,
+                )
+            else:
+                payload = commons_search(
+                    query=query,
+                    timeout=args.timeout,
+                    thumb_width=args.thumb_width,
+                    continuation=continuation,
+                )
             items = list(iter_image_items(payload))
             if not items:
                 break
