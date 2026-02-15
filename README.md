@@ -89,6 +89,8 @@ python scripts/collect_wikimedia_commons.py \
   --queries "horreo galicia" "cruceiro galicia"
 ```
 
+This writes a traceability file: `/tmp/galicia_raw/sources_wikimedia_commons.jsonl`.
+
 ### Option C (Pixabay API, free-license workflow)
 
 ```bash
@@ -314,6 +316,7 @@ python scripts/build_imagefolder_dataset.py \
   --val_ratio 0.1 \
   --concepts_file configs/concepts_galicia.json \
   --use_concept_tokens \
+  --balance \
   --include_labels horreo cruceiro
 ```
 

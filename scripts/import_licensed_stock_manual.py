@@ -18,17 +18,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Import manually licensed stock images")
     parser.add_argument("--input_dir", required=True, help="Folder containing downloaded licensed images")
     parser.add_argument("--out_dir", required=True, help="Raw dataset root (label subfolder will be created)")
-    parser.add_argument("--label", required=True, choices=["horreo", "cruceiro"], help="Target label")
+    parser.add_argument("--label", required=True, help="Target label (e.g. horreo/cruceiro/muino)")
     parser.add_argument("--source", required=True, help="Source name (shutterstock/adobe/dreamstime/manual)")
     parser.add_argument("--license_reference", required=True, help="Invoice/order/license reference id")
     parser.add_argument("--copy", action="store_true", help="Copy files (default).")
@@ -52,12 +54,18 @@ def main() -> None:
 
     transfer_mode = "move" if args.move else "copy"
 
+    label = args.label.strip().lower()
+    if not label or not LABEL_RE.match(label):
+        raise SystemExit(
+            "Invalid --label. Use a simple folder-safe label like: horreo, cruceiro, muino (a-z0-9_-)."
+        )
+
     input_dir = Path(args.input_dir)
     if not input_dir.exists() or not input_dir.is_dir():
         raise SystemExit(f"Input folder not found: {input_dir}")
 
     out_root = Path(args.out_dir)
-    label_dir = out_root / args.label.lower()
+    label_dir = out_root / label
     label_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = out_root / "licensed_sources_manifest.jsonl"
@@ -82,7 +90,7 @@ def main() -> None:
 
         row = {
             "file_name": str(dst.relative_to(out_root)),
-            "label": args.label.lower(),
+            "label": label,
             "source": args.source.lower(),
             "license_reference": args.license_reference,
             "original_file": str(src),
@@ -98,7 +106,7 @@ def main() -> None:
             {
                 "input_dir": str(input_dir),
                 "out_dir": str(out_root),
-                "label": args.label.lower(),
+                "label": label,
                 "source": args.source.lower(),
                 "license_reference": args.license_reference,
                 "transfer_mode": transfer_mode,

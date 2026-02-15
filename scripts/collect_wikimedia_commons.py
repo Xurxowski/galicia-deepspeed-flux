@@ -23,6 +23,7 @@ from PIL import Image
 from tqdm import tqdm
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+USER_AGENT = "galicia-deepspeed-flux/1.0 (dataset curation; contact: user)"
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,23 +69,37 @@ def commons_search(query: str, timeout: float, continuation: dict[str, Any] | No
         "gsrnamespace": 6,
         "gsrlimit": 50,
         "prop": "imageinfo",
-        "iiprop": "url",
+        "iiprop": "url|extmetadata",
+        "iiextmetadatafilter": "LicenseShortName|LicenseUrl|UsageTerms|Attribution|Artist|Credit|ImageDescription",
     }
     if continuation:
         params.update(continuation)
 
-    response = requests.get(COMMONS_API, params=params, timeout=timeout)
+    response = requests.get(
+        COMMONS_API,
+        params=params,
+        timeout=timeout,
+        headers={"User-Agent": USER_AGENT},
+    )
     response.raise_for_status()
     return response.json()
 
 
-def iter_image_urls(payload: dict[str, Any]):
+def iter_image_items(payload: dict[str, Any]):
     pages = payload.get("query", {}).get("pages", [])
     for page in pages:
+        title = page.get("title")
+        page_id = page.get("pageid")
         for item in page.get("imageinfo", []):
             url = item.get("url")
             if isinstance(url, str) and url.startswith("http"):
-                yield url
+                yield {
+                    "url": url,
+                    "descriptionurl": item.get("descriptionurl"),
+                    "extmetadata": item.get("extmetadata", {}),
+                    "title": title,
+                    "pageid": page_id,
+                }
 
 
 def safe_stem(url: str) -> str:
@@ -93,7 +108,7 @@ def safe_stem(url: str) -> str:
 
 def download_and_validate(url: str, timeout: float, min_side: int) -> Image.Image | None:
     try:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
         image.load()
@@ -111,6 +126,7 @@ def main() -> None:
     root = Path(args.out_dir)
     root.mkdir(parents=True, exist_ok=True)
 
+    source_log = root / "sources_wikimedia_commons.jsonl"
     summary: dict[str, int] = {}
 
     for query in args.queries:
@@ -127,13 +143,16 @@ def main() -> None:
                 break
 
             payload = commons_search(query=query, timeout=args.timeout, continuation=continuation)
-            urls = list(iter_image_urls(payload))
-            if not urls:
+            items = list(iter_image_items(payload))
+            if not items:
                 break
 
-            for url in tqdm(urls, desc=f"{query}", leave=False):
+            for item in tqdm(items, desc=f"{query}", leave=False):
                 if saved >= args.per_query:
                     break
+                url = item.get("url")
+                if not isinstance(url, str):
+                    continue
                 if url in seen:
                     continue
                 seen.add(url)
@@ -149,6 +168,27 @@ def main() -> None:
 
                 image.save(out_path, quality=95)
                 saved += 1
+
+                ext = item.get("extmetadata") if isinstance(item.get("extmetadata"), dict) else {}
+                row = {
+                    "file_name": str(out_path.relative_to(root)),
+                    "query": query,
+                    "label": label,
+                    "source": "wikimedia_commons",
+                    "title": item.get("title"),
+                    "pageid": item.get("pageid"),
+                    "description_url": item.get("descriptionurl"),
+                    "image_url": url,
+                    "license_short_name": (ext.get("LicenseShortName") or {}).get("value"),
+                    "license_url": (ext.get("LicenseUrl") or {}).get("value"),
+                    "usage_terms": (ext.get("UsageTerms") or {}).get("value"),
+                    "attribution": (ext.get("Attribution") or {}).get("value"),
+                    "artist": (ext.get("Artist") or {}).get("value"),
+                    "credit": (ext.get("Credit") or {}).get("value"),
+                    "image_description": (ext.get("ImageDescription") or {}).get("value"),
+                }
+                with source_log.open("a", encoding="utf-8") as logf:
+                    logf.write(json.dumps(row, ensure_ascii=True) + "\n")
 
             continuation = payload.get("continue")
             if not continuation:

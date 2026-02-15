@@ -80,6 +80,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional max images per label (0 = no limit)",
     )
     parser.add_argument(
+        "--balance",
+        action="store_true",
+        help="Downsample every included label to the minimum label count (helps multi-concept balance)",
+    )
+    parser.add_argument(
         "--concepts_file",
         default=None,
         help="Optional JSON file with per-label captions/tokens for scalable multi-concept training",
@@ -102,6 +107,8 @@ def list_images(folder: Path) -> list[Path]:
 
 
 def ensure_clean_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
 
 
@@ -186,6 +193,7 @@ def main() -> None:
 
     all_items: list[tuple[Path, str]] = []
     counts_by_label: dict[str, int] = defaultdict(int)
+    images_by_label: dict[str, list[Path]] = {}
 
     for label_dir in sorted(raw_root.iterdir()):
         if not label_dir.is_dir():
@@ -205,8 +213,19 @@ def main() -> None:
         if args.per_label_limit > 0:
             images = images[: args.per_label_limit]
 
+        images_by_label[label] = images
+
+    if not images_by_label:
+        raise SystemExit(f"No images found in {raw_root}")
+
+    if args.balance and len(images_by_label) > 1:
+        min_count = min(len(v) for v in images_by_label.values() if v)
+        for label in list(images_by_label.keys()):
+            images_by_label[label] = images_by_label[label][:min_count]
+
+    for label, images in images_by_label.items():
         all_items.extend((img, label) for img in images)
-        counts_by_label[label] += len(images)
+        counts_by_label[label] = len(images)
 
     if not all_items:
         raise SystemExit(f"No images found in {raw_root}")
@@ -228,6 +247,16 @@ def main() -> None:
     write_split(train_items, train_dir, captions=captions)
     write_split(val_items, val_dir, captions=captions)
 
+    # Copy traceability manifests (if any) into dataset root for later attribution.
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    for manifest in sorted(raw_root.glob("*.jsonl")):
+        if manifest.name in {"metadata.jsonl"}:
+            continue
+        try:
+            shutil.copy2(manifest, dataset_root / manifest.name)
+        except Exception:
+            pass
+
     print(
         json.dumps(
             {
@@ -237,6 +266,7 @@ def main() -> None:
                 "caption_profile": args.caption_profile,
                 "labels": counts_by_label,
                 "concept_tokens": tokens,
+                "balanced": bool(args.balance),
             },
             indent=2,
         )
