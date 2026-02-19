@@ -248,6 +248,37 @@ The app in `space/app.py` will load Z-Image-Turbo by default (or FLUX if you set
 
 This gives you near-zero local storage usage and keeps your project fully portable.
 
+### 6.1) One-command cloud training on HF Jobs (T4/A10)
+
+If local Apple Silicon training stalls, launch remote GPU training directly:
+
+```bash
+python scripts/launch_hf_job_two_lora.py \
+  --hf-username "$HF_USERNAME" \
+  --hardware t4-medium \
+  --timeout 8h \
+  --follow
+```
+
+Recommended alternatives:
+- `--hardware t4-small` for lower cost (slower)
+- `--hardware a10g-small` for faster and more stable throughput
+
+Check live status later:
+
+```bash
+python scripts/launch_hf_job_two_lora.py \
+  --hf-username "$HF_USERNAME" \
+  --job-id "<JOB_ID>" \
+  --tail-lines 120
+```
+
+This launcher:
+- trains `horreo` from `Xurxowsky/galicia-horreo-dataset-private`
+- trains `cruceiro` from `Xurxowsky/galicia-cruceiro-dataset-private`
+- uploads both LoRAs to model repos
+- updates the Space variables/app at the end
+
 ## 7) Facebook Group + Concept-Specific Retraining
 
 If you use Facebook groups (for example, `TODOS LOS HORREOS DE GALICIA RECOPILADOS`), do not scrape automatically.

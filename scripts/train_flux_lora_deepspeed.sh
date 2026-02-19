@@ -25,6 +25,7 @@ USE_DEEPSPEED="${USE_DEEPSPEED:-auto}"      # auto|1|0
 
 DIFFUSERS_DIR="${DIFFUSERS_DIR:-/tmp/diffusers}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-${DIFFUSERS_DIR}/examples/dreambooth/train_dreambooth_lora_flux.py}"
+FORCE_DIFFUSERS_INSTALL="${FORCE_DIFFUSERS_INSTALL:-0}"
 
 if [[ "${BASE_MODEL_LOWER}" == *"z-image"* ]]; then
   echo "BASE_MODEL=${BASE_MODEL} is from the Z-Image family." >&2
@@ -42,8 +43,25 @@ if [[ ! -f "${TRAIN_SCRIPT}" ]]; then
   exit 1
 fi
 
-python -m pip install -U pip
-python -m pip install -e "${DIFFUSERS_DIR}"
+NEED_DIFFUSERS_INSTALL=0
+if [[ "${FORCE_DIFFUSERS_INSTALL}" == "1" ]]; then
+  NEED_DIFFUSERS_INSTALL=1
+elif ! python - <<'PY'
+import importlib.util
+import sys
+
+sys.exit(0 if importlib.util.find_spec("diffusers") else 1)
+PY
+then
+  NEED_DIFFUSERS_INSTALL=1
+fi
+
+if [[ "${NEED_DIFFUSERS_INSTALL}" == "1" ]]; then
+  python -m pip install -U pip
+  python -m pip install --no-build-isolation -e "${DIFFUSERS_DIR}"
+else
+  echo "Using existing diffusers installation; skipping pip install."
+fi
 
 mkdir -p "${OUTPUT_DIR}"
 

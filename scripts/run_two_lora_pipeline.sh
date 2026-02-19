@@ -48,8 +48,42 @@ export HF_TOKEN
 export HF_HOME="${HF_HOME:-/private/tmp/hf-home}"
 export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${HF_HOME}/hub}"
 export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${HF_HOME}/hub}"
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO="${PYTORCH_MPS_HIGH_WATERMARK_RATIO:-0.0}"
 export TOKENIZERS_PARALLELISM=false
+export TRAIN_RETRIES="${TRAIN_RETRIES:-3}"
+
+IMAGE_LINK_ROOT="${IMAGE_LINK_ROOT:-/private/tmp/galicia_train_images}"
+
+prepare_image_only_dir() {
+  local src_dir="$1"
+  local label="$2"
+  local out_dir="${IMAGE_LINK_ROOT}/${label}"
+
+  rm -rf "${out_dir}"
+  mkdir -p "${out_dir}"
+
+  local count=0
+  while IFS= read -r -d '' file; do
+    ln -sf "${file}" "${out_dir}/$(basename "${file}")"
+    count=$((count + 1))
+  done < <(
+    find "${src_dir}" -maxdepth 1 -type f \( \
+      -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.bmp' \
+    \) -print0
+  )
+
+  if [[ "${count}" -eq 0 ]]; then
+    echo "No image files found in ${src_dir}" >&2
+    exit 1
+  fi
+
+  echo "${out_dir}"
+}
+
+TRAIN_DIR_HORREO="$(prepare_image_only_dir "${DATA_DIR_HORREO}" "horreo")"
+TRAIN_DIR_CRUCEIRO="$(prepare_image_only_dir "${DATA_DIR_CRUCEIRO}" "cruceiro")"
 
 run_train_upload() {
   local label="$1"
@@ -73,7 +107,23 @@ run_train_upload() {
   export USE_DEEPSPEED
   export CHECKPOINTING_STEPS=50
 
-  bash scripts/train_flux_lora_deepspeed.sh
+  local attempt=1
+  local trained=0
+  while [[ "${attempt}" -le "${TRAIN_RETRIES}" ]]; do
+    echo "==> [${label}] train attempt ${attempt}/${TRAIN_RETRIES}"
+    if bash scripts/train_flux_lora_deepspeed.sh; then
+      trained=1
+      break
+    fi
+    echo "==> [${label}] training attempt ${attempt} failed; retrying in 20s"
+    sleep 20
+    attempt=$((attempt + 1))
+  done
+
+  if [[ "${trained}" -ne 1 ]]; then
+    echo "==> [${label}] training failed after ${TRAIN_RETRIES} attempts" >&2
+    exit 1
+  fi
 
   echo "==> [${label}] uploading ${model_repo}"
   ./.venv/bin/python scripts/upload_to_hub.py \
@@ -84,7 +134,7 @@ run_train_upload() {
 
 run_train_upload \
   "horreo" \
-  "${DATA_DIR_HORREO}" \
+  "${TRAIN_DIR_HORREO}" \
   "${OUTPUT_DIR_HORREO}" \
   "${MODEL_REPO_HORREO}" \
   "${MAX_TRAIN_STEPS_HORREO}" \
@@ -92,7 +142,7 @@ run_train_upload \
 
 run_train_upload \
   "cruceiro" \
-  "${DATA_DIR_CRUCEIRO}" \
+  "${TRAIN_DIR_CRUCEIRO}" \
   "${OUTPUT_DIR_CRUCEIRO}" \
   "${MODEL_REPO_CRUCEIRO}" \
   "${MAX_TRAIN_STEPS_CRUCEIRO}" \
