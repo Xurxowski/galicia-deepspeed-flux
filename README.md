@@ -279,6 +279,24 @@ This launcher:
 - uploads both LoRAs to model repos
 - updates the Space variables/app at the end
 
+If HF Jobs returns `402 Payment Required`, add HF credits or use Colab/Kaggle fallback below.
+
+### 6.2) Colab/Kaggle fallback (no HF Jobs credits)
+
+In a Linux GPU notebook (T4/A10), run:
+
+```bash
+git clone https://github.com/Xurxowski/galicia-deepspeed-flux.git
+cd galicia-deepspeed-flux
+git checkout codex/galicia-deepspeed-flux
+pip install -r requirements.txt
+export HF_TOKEN="hf_..."
+export HF_USERNAME="Xurxowsky"
+export MIXED_PRECISION=fp16
+export USE_DEEPSPEED=auto
+bash scripts/run_two_lora_from_hub_datasets.sh
+```
+
 ## 7) Facebook Group + Concept-Specific Retraining
 
 If you use Facebook groups (for example, `TODOS LOS HORREOS DE GALICIA RECOPILADOS`), do not scrape automatically.
