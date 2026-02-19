@@ -188,7 +188,8 @@ export INSTANCE_PROMPT="ethnographic photo of galician horreo or cruceiro, natur
 ```
 
 Important:
-- This training path requires **Linux + NVIDIA GPU (CUDA)**. `DeepSpeed` generally will not work on macOS.
+- `DeepSpeed` path requires **Linux + NVIDIA GPU (CUDA)**.
+- On Apple Silicon / CPU-only machines, `scripts/train_flux_lora_deepspeed.sh` now auto-falls back to plain `accelerate` (no DeepSpeed).
 - For T4 GPUs, use `MIXED_PRECISION=fp16`.
 
 Run training:
@@ -229,6 +230,11 @@ python scripts/create_or_update_space.py \
 
 Then set the Space variable `LORA_REPO` to:
 - `$HF_USERNAME/flux-schnell-galicia-lora`
+
+For subject-specific adapters, you can also set:
+- `LORA_REPO_HORREO`
+- `LORA_REPO_CRUCEIRO`
+- `LORA_REPO_MUINO`
 
 The app in `space/app.py` will load Z-Image-Turbo by default (or FLUX if you set another `BASE_MODEL`).
 

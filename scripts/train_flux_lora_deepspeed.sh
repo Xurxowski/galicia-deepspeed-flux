@@ -20,7 +20,8 @@ LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-1200}"
 CHECKPOINTING_STEPS="${CHECKPOINTING_STEPS:-200}"
 SEED="${SEED:-42}"
-MIXED_PRECISION="${MIXED_PRECISION:-bf16}"   # set fp16 for T4; bf16 for A10/L4/A100 etc.
+MIXED_PRECISION="${MIXED_PRECISION:-bf16}"   # set fp16 for T4/MPS; bf16 for A10/L4/A100 etc.
+USE_DEEPSPEED="${USE_DEEPSPEED:-auto}"      # auto|1|0
 
 DIFFUSERS_DIR="${DIFFUSERS_DIR:-/tmp/diffusers}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-${DIFFUSERS_DIR}/examples/dreambooth/train_dreambooth_lora_flux.py}"
@@ -45,6 +46,35 @@ python -m pip install -U pip
 python -m pip install -e "${DIFFUSERS_DIR}"
 
 mkdir -p "${OUTPUT_DIR}"
+
+DEVICE_KIND="$(
+  python - <<'PY'
+import torch
+if torch.cuda.is_available():
+    print("cuda")
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    print("mps")
+else:
+    print("cpu")
+PY
+)"
+
+if [[ "${USE_DEEPSPEED}" == "auto" ]]; then
+  if [[ "${DEVICE_KIND}" == "cuda" ]]; then
+    USE_DEEPSPEED="1"
+  else
+    USE_DEEPSPEED="0"
+  fi
+fi
+
+if [[ "${DEVICE_KIND}" == "mps" && "${MIXED_PRECISION}" == "bf16" ]]; then
+  # PyTorch MPS does not support bf16 training.
+  MIXED_PRECISION="fp16"
+fi
+
+if [[ "${DEVICE_KIND}" == "cpu" && "${MIXED_PRECISION}" != "no" ]]; then
+  MIXED_PRECISION="no"
+fi
 
 TRAIN_ARGS=(
   --pretrained_model_name_or_path "${BASE_MODEL}"
@@ -79,15 +109,31 @@ else
   TRAIN_ARGS+=(--instance_data_dir "${DATA_DIR}")
 fi
 
-accelerate launch \
-  --config_file "$(
-    if [[ "${MIXED_PRECISION}" == "fp16" ]]; then
-      echo "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2_fp16.yaml"
-    else
-      echo "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2.yaml"
-    fi
-  )" \
-  "${TRAIN_SCRIPT}" \
-  "${TRAIN_ARGS[@]}"
+echo "Detected device: ${DEVICE_KIND}"
+echo "MIXED_PRECISION=${MIXED_PRECISION}"
+echo "USE_DEEPSPEED=${USE_DEEPSPEED}"
+
+if [[ "${DEVICE_KIND}" == "mps" ]]; then
+  export PYTORCH_ENABLE_MPS_FALLBACK=1
+fi
+
+if [[ "${USE_DEEPSPEED}" == "1" ]]; then
+  accelerate launch \
+    --config_file "$(
+      if [[ "${MIXED_PRECISION}" == "fp16" ]]; then
+        echo "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2_fp16.yaml"
+      else
+        echo "${PROJECT_ROOT}/configs/accelerate_deepspeed_zero2.yaml"
+      fi
+    )" \
+    "${TRAIN_SCRIPT}" \
+    "${TRAIN_ARGS[@]}"
+else
+  accelerate launch \
+    --num_processes 1 \
+    --mixed_precision "${MIXED_PRECISION}" \
+    "${TRAIN_SCRIPT}" \
+    "${TRAIN_ARGS[@]}"
+fi
 
 echo "Training finished. Artifacts at: ${OUTPUT_DIR}"

@@ -21,6 +21,13 @@ def parse_args() -> argparse.Namespace:
         help="BASE_MODEL Space variable value",
     )
     parser.add_argument("--lora_repo", default=None, help="Optional LORA_REPO Space variable value")
+    parser.add_argument("--lora_repo_horreo", default=None, help="Optional LORA_REPO_HORREO Space variable value")
+    parser.add_argument(
+        "--lora_repo_cruceiro",
+        default=None,
+        help="Optional LORA_REPO_CRUCEIRO Space variable value",
+    )
+    parser.add_argument("--lora_repo_muino", default=None, help="Optional LORA_REPO_MUINO Space variable value")
     parser.add_argument(
         "--lora_target",
         default=None,
@@ -57,19 +64,20 @@ def main() -> None:
         print("HfApi.add_space_variable is not available in this huggingface_hub version.")
         print(f"Set variable manually in Space settings: BASE_MODEL={args.base_model}")
 
-    if args.lora_repo:
+    def set_space_var(key: str, value: str | None) -> None:
+        if value is None:
+            return
         if hasattr(api, "add_space_variable"):
-            api.add_space_variable(repo_id=args.space_id, key="LORA_REPO", value=args.lora_repo)
-            print(f"Set Space variable LORA_REPO={args.lora_repo}")
+            api.add_space_variable(repo_id=args.space_id, key=key, value=value)
+            print(f"Set Space variable {key}={value}")
         else:
-            print(f"Set variable manually in Space settings: LORA_REPO={args.lora_repo}")
+            print(f"Set variable manually in Space settings: {key}={value}")
 
-    if args.lora_target:
-        if hasattr(api, "add_space_variable"):
-            api.add_space_variable(repo_id=args.space_id, key="LORA_TARGET", value=args.lora_target)
-            print(f"Set Space variable LORA_TARGET={args.lora_target}")
-        else:
-            print(f"Set variable manually in Space settings: LORA_TARGET={args.lora_target}")
+    set_space_var("LORA_REPO", args.lora_repo)
+    set_space_var("LORA_REPO_HORREO", args.lora_repo_horreo)
+    set_space_var("LORA_REPO_CRUCEIRO", args.lora_repo_cruceiro)
+    set_space_var("LORA_REPO_MUINO", args.lora_repo_muino)
+    set_space_var("LORA_TARGET", args.lora_target)
 
     print(f"Space uploaded: https://huggingface.co/spaces/{args.space_id}")
 

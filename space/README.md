@@ -14,6 +14,9 @@ Optional Space variables:
 - `BASE_MODEL`: defaults to `Tongyi-MAI/Z-Image-Turbo`
 - `CPU_FALLBACK_MODEL`: defaults to `stabilityai/sd-turbo`
 - `LORA_REPO`: your LoRA model repo (example: `username/flux-schnell-galicia-lora`)
+- `LORA_REPO_HORREO`: optional LoRA repo for `horreo`
+- `LORA_REPO_CRUCEIRO`: optional LoRA repo for `cruceiro`
+- `LORA_REPO_MUINO`: optional LoRA repo for `muino`
 - `LORA_WEIGHT_NAME`: LoRA file name (default: `pytorch_lora_weights.safetensors`)
 - `TOKEN_HORREO`: defaults to `<gal_horreo>`
 - `TOKEN_CRUCEIRO`: defaults to `<gal_cruceiro>`
@@ -25,6 +28,7 @@ The app auto-detects `BASE_MODEL` family:
 - other models -> `StableDiffusionPipeline`
 
 If `LORA_REPO` is not set, the app runs with base model only.
+If `LORA_REPO_HORREO` / `LORA_REPO_CRUCEIRO` are set, the app auto-switches LoRA by selected subject.
 
 UI features:
 - model selector + `Apply Model` button
