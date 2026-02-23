@@ -38,6 +38,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val_ratio", type=float, default=0.1, help="Validation ratio")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
+        "--include_labels",
+        nargs="+",
+        choices=["horreo", "cruceiro"],
+        default=["horreo", "cruceiro"],
+        help="Labels to include in the dataset output",
+    )
+    parser.add_argument(
         "--allow_missing_caption",
         action="store_true",
         help="Keep image even if .txt sidecar is missing (uses fallback caption by label)",
@@ -143,16 +150,25 @@ def main() -> None:
     val_dir = dataset_root / "validation"
     dataset_root.mkdir(parents=True, exist_ok=True)
 
-    horreo_items, horreo_skipped = list_label_items(
-        Path(args.horreos_dir),
-        "horreo",
-        allow_missing_caption=args.allow_missing_caption,
-    )
-    cruceiro_items, cruceiro_skipped = list_label_items(
-        Path(args.cruceiros_dir),
-        "cruceiro",
-        allow_missing_caption=args.allow_missing_caption,
-    )
+    include_labels = set(args.include_labels)
+
+    horreo_items: list[dict[str, str]] = []
+    cruceiro_items: list[dict[str, str]] = []
+    horreo_skipped: dict[str, int] = {}
+    cruceiro_skipped: dict[str, int] = {}
+
+    if "horreo" in include_labels:
+        horreo_items, horreo_skipped = list_label_items(
+            Path(args.horreos_dir),
+            "horreo",
+            allow_missing_caption=args.allow_missing_caption,
+        )
+    if "cruceiro" in include_labels:
+        cruceiro_items, cruceiro_skipped = list_label_items(
+            Path(args.cruceiros_dir),
+            "cruceiro",
+            allow_missing_caption=args.allow_missing_caption,
+        )
 
     if not horreo_items and not cruceiro_items:
         raise SystemExit("No valid image+caption pairs found.")
