@@ -138,7 +138,7 @@ run_train_upload \
   "${OUTPUT_DIR_HORREO}" \
   "${MODEL_REPO_HORREO}" \
   "${MAX_TRAIN_STEPS_HORREO}" \
-  "ethnographic documentary photo of a traditional galician horreo, raised granary on stone pillars, elongated slatted chamber, rural Galicia"
+  "ethnographic documentary photo of a traditional galician horreo (horreo gallego), elongated rectangular raised granary on granite pegollos with circular tornarratos capstones, ventilated slatted stone or wood chamber, gabled tile or slate roof with cruz and pinaculo finials, full exterior visible, weathered granite and moss, rural Galicia, humid atlantic light, no modern house, no interior"
 
 run_train_upload \
   "cruceiro" \
@@ -146,7 +146,7 @@ run_train_upload \
   "${OUTPUT_DIR_CRUCEIRO}" \
   "${MODEL_REPO_CRUCEIRO}" \
   "${MAX_TRAIN_STEPS_CRUCEIRO}" \
-  "ethnographic documentary photo of a galician cruceiro, carved granite cross on stone pedestal, rural Galicia, historic village context"
+  "ethnographic documentary photo of a traditional galician cruceiro de granito, stepped pedestal (gradas), tall monolithic shaft (varal) with carved capital, latin cross with Cristo on front and Virxe on reverse, full monument visible, weathered granite with lichen, by a churchyard or crossroads in rural Galicia, natural overcast atlantic light, no modern sculpture, no generic cemetery cross"
 
 echo "==> Updating Space variables"
 ./.venv/bin/python scripts/create_or_update_space.py \

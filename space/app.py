@@ -43,9 +43,30 @@ DTYPE = _pick_torch_dtype()
 GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DEFAULT_QUALITY = "stable"
 DEFAULT_NEGATIVE = (
-    "blurry, low quality, watermark, text, logo, deformed, "
-    "modern house, cottage, cabin, villa, apartment building"
+    "blurry, low quality, watermark, text, logo, deformed geometry, "
+    "generic house, modern house, chalet, cabin, villa, apartment building, interior view, "
+    "generic christian cross, cemetery cross, calvary, abstract sculpture, close-up crop"
 )
+SUBJECT_DETAIL_PRESETS = {
+    "horreo": (
+        "full exterior view, three-quarter perspective, granite pegollos and tornarratos clearly visible, "
+        "slatted ventilated chamber, tile or slate roof with cruz and pinaculo finials, moss and lichen, "
+        "humid atlantic daylight, rural aldea in Galicia"
+    ),
+    "cruceiro": (
+        "full monument visible, stepped pedestal and tall shaft with carved capital, "
+        "Cristo on front and Virxe on reverse if visible, weathered granite with lichen, "
+        "at a crossroads or churchyard in rural Galicia, overcast atlantic daylight"
+    ),
+    "muino": (
+        "stone millhouse beside flowing water, weathered granite and moss, "
+        "traditional rural Galicia, documentary realism"
+    ),
+    "mixed": (
+        "both elements fully visible, clear separation between structures, "
+        "rural Galicia, natural daylight, documentary realism"
+    ),
+}
 
 pipe = None
 pipeline_kind = ""
@@ -236,13 +257,16 @@ def build_prompt(subject: str, details: str) -> str:
     token_muino = TOKEN_MUINO if lora_active else ""
     subject_map = {
         "horreo": (
-            f"{token_horreo} traditional Galician horreo (raised granary), "
-            "long narrow granary with slatted chamber, on stone pillars (pegollos) "
-            "with capstones, exterior view, full structure visible, rural Galicia, no modern house, no interior"
+            f"{token_horreo} traditional Galician horreo (horreo gallego), "
+            "elongated rectangular raised granary on granite pegollos with circular tornarratos capstones, "
+            "ventilated slatted stone or wood chamber, gabled tile or slate roof with cruz and pinaculo finials, "
+            "full exterior visible, weathered granite and moss, rural Galicia, no modern house, no interior"
         ),
         "cruceiro": (
-            f"{token_cruceiro} Galician cruceiro, carved granite cross on stone pedestal, "
-            "historic village context, rural Galicia"
+            f"{token_cruceiro} traditional Galician cruceiro de granito, "
+            "stepped pedestal (gradas), tall monolithic shaft (varal) with carved capital, "
+            "latin cross with Cristo on front and Virxe on reverse, full monument visible, "
+            "weathered granite with lichen, churchyard or crossroads, rural Galicia"
         ),
         "muino": (
             f"{token_muino} traditional Galician muino (water mill), "
@@ -257,6 +281,10 @@ def build_prompt(subject: str, details: str) -> str:
         f"ethnographic documentary photography, {base}, "
         f"stone and wood textures, natural light, realistic details, {details}"
     )
+
+
+def suggest_details(subject: str) -> str:
+    return SUBJECT_DETAIL_PRESETS.get(subject, SUBJECT_DETAIL_PRESETS["horreo"])
 
 
 def normalize_resolution(resolution: int) -> int:
@@ -411,7 +439,7 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
             label="Subject",
         )
         details = gr.Textbox(
-            value="rural landscape, cloudy sky, documentary style",
+            value=SUBJECT_DETAIL_PRESETS["horreo"],
             label="Prompt details",
         )
 
@@ -450,6 +478,12 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         fn=apply_stable_preset,
         inputs=[],
         outputs=[steps, guidance, resolution, quality_profile, fast_mode, negative_details],
+    )
+
+    subject.change(
+        fn=suggest_details,
+        inputs=[subject],
+        outputs=[details],
     )
 
     run_btn.click(
