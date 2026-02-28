@@ -6,11 +6,11 @@ import threading
 
 import gradio as gr
 import torch
-from diffusers import FluxPipeline, StableDiffusionPipeline, ZImagePipeline
+from diffusers import FluxPipeline, StableDiffusionPipeline
 from huggingface_hub import InferenceClient, get_token
 
-BASE_MODEL = os.getenv("BASE_MODEL", "Tongyi-MAI/Z-Image-Turbo")
-CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "stabilityai/sd-turbo")
+BASE_MODEL = os.getenv("BASE_MODEL", "black-forest-labs/FLUX.1-schnell")
+CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "stabilityai/stable-diffusion-2-1-base")
 USE_INFERENCE_API = os.getenv("USE_INFERENCE_API", "1").strip().lower() not in {"0", "false", "no", "off"}
 INFERENCE_TIMEOUT_SEC = float(os.getenv("INFERENCE_TIMEOUT_SEC", "120"))
 LORA_REPO = os.getenv("LORA_REPO", "")
@@ -18,15 +18,17 @@ LORA_REPO_HORREO = os.getenv("LORA_REPO_HORREO", "")
 LORA_REPO_CRUCEIRO = os.getenv("LORA_REPO_CRUCEIRO", "")
 LORA_REPO_MUINO = os.getenv("LORA_REPO_MUINO", "")
 LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "pytorch_lora_weights.safetensors")
-LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux | z-image | both/auto
+LORA_WEIGHT_NAME_HORREO = os.getenv("LORA_WEIGHT_NAME_HORREO", "")
+LORA_WEIGHT_NAME_CRUCEIRO = os.getenv("LORA_WEIGHT_NAME_CRUCEIRO", "")
+LORA_WEIGHT_NAME_MUINO = os.getenv("LORA_WEIGHT_NAME_MUINO", "")
+LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux
 TOKEN_HORREO = os.getenv("TOKEN_HORREO", "<gal_horreo>")
 TOKEN_CRUCEIRO = os.getenv("TOKEN_CRUCEIRO", "<gal_cruceiro>")
 TOKEN_MUINO = os.getenv("TOKEN_MUINO", "<gal_muino>")
+APP_VERSION = os.getenv("APP_VERSION", "2026-02-28-1")
 
 MODEL_CHOICES = [
-    "Tongyi-MAI/Z-Image-Turbo",
     "black-forest-labs/FLUX.1-schnell",
-    "stabilityai/sd-turbo",
     "stabilityai/stable-diffusion-2-1-base",
 ]
 
@@ -75,6 +77,7 @@ effective_model_id = ""
 last_model_note = ""
 lora_active = False
 active_lora_repo = ""
+active_lora_weight_name = ""
 MODEL_LOCK = threading.Lock()
 
 
@@ -85,37 +88,42 @@ def _apply_common_pipeline_tuning(current_pipe) -> None:
         current_pipe.set_progress_bar_config(disable=True)
 
 
-def _pick_lora_repo_for_subject(subject: str) -> str:
-    per_subject = {
+def _pick_lora_spec_for_subject(subject: str) -> tuple[str, str]:
+    per_subject_repo = {
         "horreo": LORA_REPO_HORREO,
         "cruceiro": LORA_REPO_CRUCEIRO,
         "muino": LORA_REPO_MUINO,
     }
-    return per_subject.get(subject, "") or LORA_REPO
+    per_subject_weight = {
+        "horreo": LORA_WEIGHT_NAME_HORREO,
+        "cruceiro": LORA_WEIGHT_NAME_CRUCEIRO,
+        "muino": LORA_WEIGHT_NAME_MUINO,
+    }
+    repo = per_subject_repo.get(subject, "") or LORA_REPO
+    weight_name = per_subject_weight.get(subject, "") or LORA_WEIGHT_NAME
+    return repo, weight_name
 
 
-def _try_load_lora(current_pipe, kind: str, lora_repo: str) -> tuple[str, bool]:
+def _try_load_lora(current_pipe, kind: str, lora_repo: str, lora_weight_name: str) -> tuple[str, bool]:
     if not lora_repo:
         return "", False
     if kind.startswith("remote-"):
         return "LoRA disabled: remote Inference API mode does not support applying LoRAs.", False
-    if kind not in {"z-image", "flux"}:
+    if kind != "flux":
         return f"LoRA ignored for pipeline `{kind}`.", False
-    if LORA_TARGET in {"flux", "flux-only"} and kind != "flux":
-        return "LoRA configured for `flux`; ignored for `z-image`.", False
-    if LORA_TARGET in {"z-image", "zimage", "z-image-only"} and kind != "z-image":
-        return "LoRA configured for `z-image`; ignored for `flux`.", False
+    if LORA_TARGET not in {"flux", "flux-only", "auto", "both"}:
+        return f"Unsupported LORA_TARGET `{LORA_TARGET}`. Expected `flux`.", False
     try:
-        current_pipe.load_lora_weights(lora_repo, weight_name=LORA_WEIGHT_NAME)
-        return f"LoRA loaded from `{lora_repo}`.", True
+        current_pipe.load_lora_weights(lora_repo, weight_name=lora_weight_name)
+        return f"LoRA loaded from `{lora_repo}` (`{lora_weight_name}`).", True
     except Exception as exc:
-        return f"Could not load LoRA `{lora_repo}`: {exc}", False
+        return f"Could not load LoRA `{lora_repo}` (`{lora_weight_name}`): {exc}", False
 
 
 def _build_pipeline(target_model: str):
     target_lower = target_model.lower()
 
-    if not torch.cuda.is_available() and ("z-image" in target_lower or "flux" in target_lower):
+    if not torch.cuda.is_available() and "flux" in target_lower:
         if USE_INFERENCE_API:
             token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
             client = InferenceClient(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
@@ -136,9 +144,6 @@ def _build_pipeline(target_model: str):
         )
         return cpu_pipe, "cpu-fallback", CPU_FALLBACK_MODEL, note
 
-    if "z-image" in target_lower:
-        return ZImagePipeline.from_pretrained(target_model, torch_dtype=DTYPE), "z-image", target_model, ""
-
     if "flux" in target_lower:
         return FluxPipeline.from_pretrained(target_model, torch_dtype=DTYPE), "flux", target_model, ""
 
@@ -157,7 +162,10 @@ def _status_text() -> str:
         f"Pipeline: `{pipeline_kind}`"
     )
     if lora_active and active_lora_repo:
-        base += f" | LoRA: `{active_lora_repo}`"
+        if active_lora_weight_name:
+            base += f" | LoRA: `{active_lora_repo}` (`{active_lora_weight_name}`)"
+        else:
+            base += f" | LoRA: `{active_lora_repo}`"
     if last_model_note:
         return f"{base}\n\n{last_model_note}"
     if pipeline_kind.startswith("remote-"):
@@ -169,14 +177,15 @@ def _status_text() -> str:
     if pipeline_kind == "cpu-fallback":
         return (
             f"{base}\n\n"
-            "Tip: this Space is running on CPU. To use FLUX / Z-Image, switch the Space Hardware to a GPU "
+            "Tip: this Space is running on CPU. To use FLUX with LoRA, switch the Space Hardware to a GPU "
             "(T4 or A10) in the Space Settings."
         )
     return base
 
 
 def switch_model(target_model: str) -> str:
-    global pipe, pipeline_kind, requested_model_id, effective_model_id, last_model_note, lora_active, active_lora_repo
+    global pipe, pipeline_kind, requested_model_id, effective_model_id, last_model_note, lora_active
+    global active_lora_repo, active_lora_weight_name
 
     with MODEL_LOCK:
         previous_pipe = pipe
@@ -186,12 +195,15 @@ def switch_model(target_model: str) -> str:
         previous_note = last_model_note
         previous_lora_active = lora_active
         previous_lora_repo = active_lora_repo
+        previous_lora_weight = active_lora_weight_name
 
         try:
             next_pipe, next_kind, next_effective, load_note = _build_pipeline(target_model)
             _apply_common_pipeline_tuning(next_pipe)
-            startup_lora_repo = _pick_lora_repo_for_subject("horreo")
-            lora_note, lora_loaded = _try_load_lora(next_pipe, next_kind, startup_lora_repo)
+            startup_lora_repo, startup_lora_weight = _pick_lora_spec_for_subject("horreo")
+            lora_note, lora_loaded = _try_load_lora(
+                next_pipe, next_kind, startup_lora_repo, startup_lora_weight
+            )
 
             pipe = next_pipe
             pipeline_kind = next_kind
@@ -199,6 +211,7 @@ def switch_model(target_model: str) -> str:
             effective_model_id = next_effective
             lora_active = lora_loaded
             active_lora_repo = startup_lora_repo if lora_loaded else ""
+            active_lora_weight_name = startup_lora_weight if lora_loaded else ""
 
             merged_note = "\n".join([n for n in [load_note, lora_note] if n])
             last_model_note = merged_note
@@ -217,38 +230,43 @@ def switch_model(target_model: str) -> str:
             last_model_note = previous_note
             lora_active = previous_lora_active
             active_lora_repo = previous_lora_repo
+            active_lora_weight_name = previous_lora_weight
             return _status_text() + f"\n\nModel switch failed: {exc}"
 
 
 def _ensure_subject_lora(subject: str) -> None:
-    global last_model_note, lora_active, active_lora_repo
+    global last_model_note, lora_active, active_lora_repo, active_lora_weight_name
 
-    target_repo = _pick_lora_repo_for_subject(subject)
+    target_repo, target_weight_name = _pick_lora_spec_for_subject(subject)
     if not target_repo:
         lora_active = False
         active_lora_repo = ""
+        active_lora_weight_name = ""
         return
 
-    if pipeline_kind.startswith("remote-") or pipeline_kind not in {"z-image", "flux"}:
+    if pipeline_kind.startswith("remote-") or pipeline_kind != "flux":
         lora_active = False
         active_lora_repo = ""
+        active_lora_weight_name = ""
         return
 
-    if lora_active and active_lora_repo == target_repo:
+    if lora_active and active_lora_repo == target_repo and active_lora_weight_name == target_weight_name:
         return
 
     try:
         if hasattr(pipe, "unload_lora_weights"):
             pipe.unload_lora_weights()
-        lora_note, lora_loaded = _try_load_lora(pipe, pipeline_kind, target_repo)
+        lora_note, lora_loaded = _try_load_lora(pipe, pipeline_kind, target_repo, target_weight_name)
         lora_active = lora_loaded
         active_lora_repo = target_repo if lora_loaded else ""
+        active_lora_weight_name = target_weight_name if lora_loaded else ""
         if lora_note:
             last_model_note = lora_note
     except Exception as exc:
         lora_active = False
         active_lora_repo = ""
-        last_model_note = f"Could not switch LoRA `{target_repo}`: {exc}"
+        active_lora_weight_name = ""
+        last_model_note = f"Could not switch LoRA `{target_repo}` (`{target_weight_name}`): {exc}"
 
 
 def build_prompt(subject: str, details: str) -> str:
@@ -322,9 +340,7 @@ def recommended_preset():
 
     if kind == "flux" or kind.startswith("remote-"):
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
-    if kind == "z-image":
-        return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
-    if model_id == "stabilityai/sd-turbo" or kind == "cpu-fallback":
+    if kind == "cpu-fallback":
         return (1, 0.0, 512, "stable", False, DEFAULT_NEGATIVE)
     # Generic SD pipeline (higher-quality but slower).
     return (25, 7.0, 768, "stable", False, DEFAULT_NEGATIVE)
@@ -380,7 +396,7 @@ def generate(
         if negative_text and active_kind in {"cpu-fallback", "sd"}:
             kwargs["negative_prompt"] = negative_text
 
-        if active_kind in {"z-image", "flux"}:
+        if active_kind == "flux":
             kwargs["max_sequence_length"] = use_seq_len
 
         if active_kind.startswith("remote-"):
@@ -399,7 +415,6 @@ def generate(
                     "Common fixes:\n"
                     "- Add `HF_TOKEN` as a Space secret\n"
                     "- Accept the model license on its model page\n"
-                    "- If using Z-Image-Turbo: it may require paid inference credits\n\n"
                     f"Error: {exc}"
                 ) from exc
         else:
@@ -415,7 +430,8 @@ INIT_STEPS, INIT_GUIDANCE, INIT_RESOLUTION, INIT_QUALITY, INIT_FAST_MODE, INIT_N
 with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
     gr.Markdown(
         "# Galicia Ethnography Generator\n"
-        "Generate images of **horreos**, **cruceiros** and **muinos** and switch models from the UI."
+        f"Generate images of **horreos**, **cruceiros** and **muinos** and switch models from the UI.\n\n"
+        f"`app_version: {APP_VERSION}`"
     )
 
     with gr.Row():
@@ -430,7 +446,7 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
     gr.Markdown(
         "Preset recomendado activo. Si cambias el modelo, pulsa `Apply Model` para reajustar los valores."
     )
-    gr.Markdown("Tip: on `cpu-basic`, large models are auto-fallback to lightweight CPU model.")
+    gr.Markdown("Tip: on `cpu-basic`, FLUX runs via remote API and LoRA is disabled in remote mode.")
 
     with gr.Row():
         subject = gr.Dropdown(
