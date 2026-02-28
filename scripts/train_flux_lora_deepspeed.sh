@@ -22,6 +22,10 @@ CHECKPOINTING_STEPS="${CHECKPOINTING_STEPS:-200}"
 SEED="${SEED:-42}"
 MIXED_PRECISION="${MIXED_PRECISION:-bf16}"   # set fp16 for T4/MPS; bf16 for A10/L4/A100 etc.
 USE_DEEPSPEED="${USE_DEEPSPEED:-auto}"      # auto|1|0
+CACHE_LATENTS="${CACHE_LATENTS:-0}"         # 1 enables --cache_latents (less VRAM, more RAM/time)
+GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-0}"  # 1 enables --gradient_checkpointing
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"  # keep 0 on laptops to reduce memory pressure
+EXTRA_TRAIN_ARGS="${EXTRA_TRAIN_ARGS:-}"    # optional raw args passed to train script
 
 DIFFUSERS_DIR="${DIFFUSERS_DIR:-/tmp/diffusers}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-${DIFFUSERS_DIR}/examples/dreambooth/train_dreambooth_lora_flux.py}"
@@ -109,7 +113,23 @@ TRAIN_ARGS=(
   --checkpointing_steps "${CHECKPOINTING_STEPS}"
   --mixed_precision "${MIXED_PRECISION}"
   --seed "${SEED}"
+  --dataloader_num_workers "${DATALOADER_NUM_WORKERS}"
 )
+
+if [[ "${CACHE_LATENTS}" == "1" ]]; then
+  TRAIN_ARGS+=(--cache_latents)
+fi
+
+if [[ "${GRADIENT_CHECKPOINTING}" == "1" ]]; then
+  TRAIN_ARGS+=(--gradient_checkpointing)
+fi
+
+if [[ -n "${EXTRA_TRAIN_ARGS}" ]]; then
+  # Allow advanced tuning flags without editing this launcher.
+  # shellcheck disable=SC2206
+  EXTRA_ARGS_ARRAY=(${EXTRA_TRAIN_ARGS})
+  TRAIN_ARGS+=("${EXTRA_ARGS_ARRAY[@]}")
+fi
 
 if [[ -n "${DATASET_NAME}" ]]; then
   echo "Using dataset_name mode with captions:"
@@ -130,6 +150,9 @@ fi
 echo "Detected device: ${DEVICE_KIND}"
 echo "MIXED_PRECISION=${MIXED_PRECISION}"
 echo "USE_DEEPSPEED=${USE_DEEPSPEED}"
+echo "CACHE_LATENTS=${CACHE_LATENTS}"
+echo "GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING}"
+echo "DATALOADER_NUM_WORKERS=${DATALOADER_NUM_WORKERS}"
 
 if [[ "${DEVICE_KIND}" == "mps" ]]; then
   export PYTORCH_ENABLE_MPS_FALLBACK=1

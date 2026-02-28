@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cruceiros_dir", required=True, help="Path to Cruceiros folder")
     parser.add_argument("--dataset_dir", required=True, help="Output dataset root")
     parser.add_argument("--val_ratio", type=float, default=0.1, help="Validation ratio")
+    parser.add_argument(
+        "--max_per_label",
+        type=int,
+        default=0,
+        help="Maximum number of pairs per label before train/validation split (0 keeps all)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
         "--include_labels",
@@ -177,7 +183,14 @@ def main() -> None:
     train_items: list[dict[str, str]] = []
     val_items: list[dict[str, str]] = []
 
+    selected_counts = {"horreo": 0, "cruceiro": 0}
+
     for label, label_items in per_label.items():
+        if args.max_per_label > 0 and len(label_items) > args.max_per_label:
+            random.shuffle(label_items)
+            label_items = label_items[: args.max_per_label]
+
+        selected_counts[label] = len(label_items)
         random.shuffle(label_items)
         n_val = choose_val_count(len(label_items), args.val_ratio)
         val_items.extend(label_items[:n_val])
@@ -202,6 +215,7 @@ def main() -> None:
             "horreo": len(horreo_items),
             "cruceiro": len(cruceiro_items),
         },
+        "selected_label_counts": selected_counts,
         "skipped": {
             "horreo": horreo_skipped,
             "cruceiro": cruceiro_skipped,
