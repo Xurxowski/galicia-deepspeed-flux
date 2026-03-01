@@ -145,6 +145,19 @@ def _build_pipeline(target_model: str):
     is_sdxl = "sdxl" in target_lower
 
     if not torch.cuda.is_available() and ("flux" in target_lower or is_sdxl):
+        if is_sdxl:
+            # SDXL on CPU is too heavy to run locally, and Inference API compatibility may vary.
+            # Fall back to a smaller local SD pipeline to keep the Space responsive on cpu-basic.
+            cpu_pipe = StableDiffusionPipeline.from_pretrained(
+                CPU_FALLBACK_MODEL,
+                torch_dtype=torch.float32,
+                safety_checker=None,
+            )
+            note = (
+                f"CPU runtime detected: requested `{target_model}`, "
+                f"running fallback `{CPU_FALLBACK_MODEL}` (SDXL not enabled on CPU in this Space)."
+            )
+            return cpu_pipe, "cpu-fallback", CPU_FALLBACK_MODEL, note
         if USE_INFERENCE_API:
             token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
             client = InferenceClient(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
