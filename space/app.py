@@ -492,8 +492,8 @@ def generate(
                 raise gr.Error("Sube una imagen de referencia para usar image-to-image.")
             if active_kind.startswith("remote-"):
                 raise gr.Error(
-                    "Image-to-image no está disponible con FLUX en modo remoto (Inference API). "
-                    "Usa SD2 o cambia el hardware del Space a GPU para FLUX local."
+                    "Image-to-image no está disponible en modo remoto (Inference API) en este Space (CPU). "
+                    "Cambia a `texto-a-imagen` o usa un modelo local (SD2 en CPU) / hardware GPU para img2img local."
                 )
             if active_img2img_pipe is None:
                 raise gr.Error("Image-to-image no está disponible para el modelo activo.")
@@ -519,8 +519,9 @@ def generate(
                     "Remote Inference API call failed.\n\n"
                     "Common fixes:\n"
                     "- Add `HF_TOKEN` as a Space secret\n"
-                    "- Accept the model license on its model page\n"
-                    f"Error: {exc}"
+                    "- Accept the model license on its model page\n\n"
+                    f"Model: `{effective_model_id}`\n"
+                    f"Error: {exc!r}"
                 ) from exc
         else:
             if active_kind == "flux":
