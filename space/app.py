@@ -145,19 +145,6 @@ def _build_pipeline(target_model: str):
     is_sdxl = "sdxl" in target_lower
 
     if not torch.cuda.is_available() and ("flux" in target_lower or is_sdxl):
-        if is_sdxl:
-            # SDXL on CPU is too heavy to run locally, and Inference API compatibility may vary.
-            # Fall back to a smaller local SD pipeline to keep the Space responsive on cpu-basic.
-            cpu_pipe = StableDiffusionPipeline.from_pretrained(
-                CPU_FALLBACK_MODEL,
-                torch_dtype=torch.float32,
-                safety_checker=None,
-            )
-            note = (
-                f"CPU runtime detected: requested `{target_model}`, "
-                f"running fallback `{CPU_FALLBACK_MODEL}` (SDXL not enabled on CPU in this Space)."
-            )
-            return cpu_pipe, "cpu-fallback", CPU_FALLBACK_MODEL, note
         if USE_INFERENCE_API:
             token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
             client = InferenceClient(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
@@ -482,7 +469,10 @@ def generate(
         active_pipe = pipe
         active_img2img_pipe = img2img_pipe
         active_kind = pipeline_kind
+        active_effective_model_id = effective_model_id
         status_snapshot = _status_text()
+
+    is_sdxl_model = "sdxl" in active_effective_model_id.lower()
 
     generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
 
@@ -504,10 +494,45 @@ def generate(
             if init_image is None:
                 raise gr.Error("Sube una imagen de referencia para usar image-to-image.")
             if active_kind.startswith("remote-"):
-                raise gr.Error(
-                    "Image-to-image no está disponible en modo remoto (Inference API) en este Space (CPU). "
-                    "Cambia a `texto-a-imagen` o usa un modelo local (SD2 en CPU) / hardware GPU para img2img local."
-                )
+                if not is_sdxl_model:
+                    raise gr.Error(
+                        "Image-to-image en modo remoto (Inference API) solo está habilitado para SDXL en este Space. "
+                        "Para FLUX remoto usa `texto-a-imagen`."
+                    )
+
+                reference_image = init_image.convert("RGB").resize((use_resolution, use_resolution))
+                try:
+                    result = active_pipe.image_to_image(
+                        prompt=prompt,
+                        image=reference_image,
+                        strength=max(0.05, min(1.0, float(img2img_strength))),
+                        height=use_resolution,
+                        width=use_resolution,
+                        num_inference_steps=use_steps,
+                        guidance_scale=guidance,
+                    )
+                except Exception as exc:
+                    raise gr.Error(
+                        "Remote Inference API img2img call failed.\n\n"
+                        "Common fixes:\n"
+                        "- Add `HF_TOKEN` as a Space secret\n"
+                        "- Accept the model license on its model page\n\n"
+                        f"Model: `{effective_model_id}`\n"
+                        f"Pipeline: `{active_kind}`\n"
+                        f"Error: {exc!r}"
+                    ) from exc
+
+                # huggingface_hub may return a PIL image or raw bytes depending on backend.
+                if hasattr(result, "convert"):
+                    image = result
+                else:
+                    from io import BytesIO
+
+                    from PIL import Image
+
+                    image = Image.open(BytesIO(result)).convert("RGB")
+
+                return image, prompt, status_snapshot
             if active_img2img_pipe is None:
                 raise gr.Error("Image-to-image no está disponible para el modelo activo.")
 
@@ -519,7 +544,7 @@ def generate(
             image = active_img2img_pipe(**kwargs).images[0]
         elif active_kind.startswith("remote-"):
             try:
-                image = active_pipe.text_to_image(
+                result = active_pipe.text_to_image(
                     prompt,
                     height=use_resolution,
                     width=use_resolution,
@@ -527,13 +552,21 @@ def generate(
                     guidance_scale=guidance,
                     seed=seed,
                 )
+                if hasattr(result, "convert"):
+                    image = result
+                else:
+                    from io import BytesIO
+
+                    from PIL import Image
+
+                    image = Image.open(BytesIO(result)).convert("RGB")
             except Exception as exc:
                 raise gr.Error(
                     "Remote Inference API call failed.\n\n"
                     "Common fixes:\n"
                     "- Add `HF_TOKEN` as a Space secret\n"
                     "- Accept the model license on its model page\n\n"
-                    f"Model: `{effective_model_id}`\n"
+                    f"Model: `{active_effective_model_id}`\n"
                     f"Pipeline: `{active_kind}`\n"
                     f"Error: {exc!r}"
                 ) from exc
