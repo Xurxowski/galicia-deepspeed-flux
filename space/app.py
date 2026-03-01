@@ -419,7 +419,10 @@ def recommended_preset():
         kind = pipeline_kind
         model_id = effective_model_id
 
-    if kind == "flux" or kind.startswith("remote-"):
+    if kind.startswith("remote-"):
+        # Remote Inference API is usually queued / shared; keep defaults small for responsiveness.
+        return (3, 3.0, 640, "fast", True, DEFAULT_NEGATIVE)
+    if kind == "flux":
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
     if kind == "sdxl":
         # SDXL Turbo is designed for very low steps.
