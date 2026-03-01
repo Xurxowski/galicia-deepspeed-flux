@@ -38,6 +38,7 @@ MODEL_CHOICES = [
     "black-forest-labs/FLUX.1-schnell",
     "LanguageMachines/stable-diffusion-2-1-base",
     "stabilityai/sdxl-turbo",
+    "stabilityai/stable-diffusion-xl-base-1.0",
 ]
 
 def _pick_torch_dtype() -> torch.dtype:
@@ -421,6 +422,9 @@ def recommended_preset():
 
     if kind.startswith("remote-"):
         # Remote Inference API is usually queued / shared; keep defaults small for responsiveness.
+        if "sdxl-turbo" in effective_model_id.lower():
+            # SDXL Turbo is trained for guidance_scale=0 and 512px.
+            return (4, 0.0, 512, "fast", True, DEFAULT_NEGATIVE)
         return (3, 3.0, 640, "fast", True, DEFAULT_NEGATIVE)
     if kind == "flux":
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
@@ -472,7 +476,9 @@ def generate(
         active_effective_model_id = effective_model_id
         status_snapshot = _status_text()
 
-    is_sdxl_model = "sdxl" in active_effective_model_id.lower()
+    effective_lower = active_effective_model_id.lower()
+    is_sdxl_turbo = "sdxl-turbo" in effective_lower
+    is_sdxl_base = "stable-diffusion-xl" in effective_lower or effective_lower.endswith("sdxl-base-1.0")
 
     generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
 
@@ -494,10 +500,10 @@ def generate(
             if init_image is None:
                 raise gr.Error("Sube una imagen de referencia para usar image-to-image.")
             if active_kind.startswith("remote-"):
-                if not is_sdxl_model:
+                if not is_sdxl_base:
                     raise gr.Error(
-                        "Image-to-image en modo remoto (Inference API) solo está habilitado para SDXL en este Space. "
-                        "Para FLUX remoto usa `texto-a-imagen`."
+                        "Image-to-image en modo remoto (Inference API) solo está habilitado para `SDXL Base` en este Space. "
+                        "Para FLUX/SDXL Turbo remotos usa `texto-a-imagen`."
                     )
 
                 reference_image = init_image.convert("RGB").resize((use_resolution, use_resolution))
@@ -544,14 +550,21 @@ def generate(
             image = active_img2img_pipe(**kwargs).images[0]
         elif active_kind.startswith("remote-"):
             try:
-                result = active_pipe.text_to_image(
-                    prompt,
+                remote_kwargs = dict(
+                    prompt=prompt,
                     height=use_resolution,
                     width=use_resolution,
                     num_inference_steps=use_steps,
                     guidance_scale=guidance,
                     seed=seed,
                 )
+                if is_sdxl_turbo:
+                    # SDXL Turbo does not use negative_prompt and works best with guidance_scale=0.
+                    remote_kwargs["height"] = min(remote_kwargs["height"], 512)
+                    remote_kwargs["width"] = min(remote_kwargs["width"], 512)
+                    remote_kwargs["guidance_scale"] = 0.0
+
+                result = active_pipe.text_to_image(**remote_kwargs)
                 if hasattr(result, "convert"):
                     image = result
                 else:
