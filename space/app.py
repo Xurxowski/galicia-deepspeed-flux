@@ -6,11 +6,18 @@ import threading
 
 import gradio as gr
 import torch
-from diffusers import FluxPipeline, StableDiffusionPipeline
+from diffusers import (
+    FluxImg2ImgPipeline,
+    FluxPipeline,
+    StableDiffusionImg2ImgPipeline,
+    StableDiffusionPipeline,
+    StableDiffusionXLImg2ImgPipeline,
+    StableDiffusionXLPipeline,
+)
 from huggingface_hub import InferenceClient, get_token
 
 BASE_MODEL = os.getenv("BASE_MODEL", "black-forest-labs/FLUX.1-schnell")
-CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "stabilityai/stable-diffusion-2-1-base")
+CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "LanguageMachines/stable-diffusion-2-1-base")
 USE_INFERENCE_API = os.getenv("USE_INFERENCE_API", "1").strip().lower() not in {"0", "false", "no", "off"}
 INFERENCE_TIMEOUT_SEC = float(os.getenv("INFERENCE_TIMEOUT_SEC", "120"))
 LORA_REPO = os.getenv("LORA_REPO", "")
@@ -21,7 +28,7 @@ LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "pytorch_lora_weights.safetenso
 LORA_WEIGHT_NAME_HORREO = os.getenv("LORA_WEIGHT_NAME_HORREO", "")
 LORA_WEIGHT_NAME_CRUCEIRO = os.getenv("LORA_WEIGHT_NAME_CRUCEIRO", "")
 LORA_WEIGHT_NAME_MUINO = os.getenv("LORA_WEIGHT_NAME_MUINO", "")
-LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux
+LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux|sd|both|auto
 TOKEN_HORREO = os.getenv("TOKEN_HORREO", "<gal_horreo>")
 TOKEN_CRUCEIRO = os.getenv("TOKEN_CRUCEIRO", "<gal_cruceiro>")
 TOKEN_MUINO = os.getenv("TOKEN_MUINO", "<gal_muino>")
@@ -29,7 +36,8 @@ APP_VERSION = os.getenv("APP_VERSION", "2026-02-28-1")
 
 MODEL_CHOICES = [
     "black-forest-labs/FLUX.1-schnell",
-    "stabilityai/stable-diffusion-2-1-base",
+    "LanguageMachines/stable-diffusion-2-1-base",
+    "stabilityai/sdxl-turbo",
 ]
 
 def _pick_torch_dtype() -> torch.dtype:
@@ -45,20 +53,26 @@ DTYPE = _pick_torch_dtype()
 GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DEFAULT_QUALITY = "stable"
 DEFAULT_NEGATIVE = (
-    "blurry, low quality, watermark, text, logo, deformed geometry, "
-    "generic house, modern house, chalet, cabin, villa, apartment building, interior view, "
-    "generic christian cross, cemetery cross, calvary, abstract sculpture, close-up crop"
+    "blurry, low quality, watermark, text, logo, deformed geometry, modern elements, "
+    "modern cross, cemetery, gravestone, wooden cross, metal cross, church interior, "
+    "asturian horreo, square stone pillars, round pegollos, wooden pillars, stairs, ground-level granary, "
+    "thatched roof, modern barn, metal roof, concrete base, generic christian cross, calvary, "
+    "close-up crop, interior view, apartment building, cabin, chalet"
 )
 SUBJECT_DETAIL_PRESETS = {
     "horreo": (
-        "full exterior view, three-quarter perspective, granite pegollos and tornarratos clearly visible, "
-        "slatted ventilated chamber, tile or slate roof with cruz and pinaculo finials, moss and lichen, "
-        "humid atlantic daylight, rural aldea in Galicia"
+        "traditional Galician granary called horreo, elevated structure on cylindrical stone pegollos, "
+        "granite feet (pies) with ant guards (tornaformigas), tornarratos on pillars, "
+        "rectangular wooden chest with vertical duelas/tablillas and ventilation gaps, horizontal fajas, "
+        "interior lintel (dintel interior), wooden door with penal lock, slate roof with sobrepens and cornisa, "
+        "pinche and cross adornos on ridge, no stairs, not Asturian, full exterior visible, rural Galicia"
     ),
     "cruceiro": (
-        "full monument visible, stepped pedestal and tall shaft with carved capital, "
-        "Cristo on front and Virxe on reverse if visible, weathered granite with lichen, "
-        "at a crossroads or churchyard in rural Galicia, overcast atlantic daylight"
+        "traditional Galician cruceiro in granite, square stepped base with three tiers, "
+        "octagonal shaft with carved geometric motifs, decorated capital with vegetal/volute motifs, "
+        "latin cross with flared arms, full monument visible, weathered granite with lichen and moss, "
+        "rural Galicia (crossroads or churchyard), overcast atlantic daylight, "
+        "plataforma_escalonada, pousadoiro, fuste_octogonal"
     ),
     "muino": (
         "stone millhouse beside flowing water, weathered granite and moss, "
@@ -71,6 +85,7 @@ SUBJECT_DETAIL_PRESETS = {
 }
 
 pipe = None
+img2img_pipe = None
 pipeline_kind = ""
 requested_model_id = ""
 effective_model_id = ""
@@ -109,10 +124,14 @@ def _try_load_lora(current_pipe, kind: str, lora_repo: str, lora_weight_name: st
         return "", False
     if kind.startswith("remote-"):
         return "LoRA disabled: remote Inference API mode does not support applying LoRAs.", False
-    if kind != "flux":
+    if kind not in {"flux", "sd"}:
         return f"LoRA ignored for pipeline `{kind}`.", False
-    if LORA_TARGET not in {"flux", "flux-only", "auto", "both"}:
-        return f"Unsupported LORA_TARGET `{LORA_TARGET}`. Expected `flux`.", False
+    allowed_targets = {
+        "flux": {"flux", "flux-only", "auto", "both", "all"},
+        "sd": {"sd", "sd-only", "auto", "both", "all"},
+    }
+    if LORA_TARGET not in allowed_targets[kind]:
+        return f"LoRA disabled for pipeline `{kind}` by LORA_TARGET `{LORA_TARGET}`.", False
     try:
         current_pipe.load_lora_weights(lora_repo, weight_name=lora_weight_name)
         return f"LoRA loaded from `{lora_repo}` (`{lora_weight_name}`).", True
@@ -123,7 +142,9 @@ def _try_load_lora(current_pipe, kind: str, lora_repo: str, lora_weight_name: st
 def _build_pipeline(target_model: str):
     target_lower = target_model.lower()
 
-    if not torch.cuda.is_available() and "flux" in target_lower:
+    is_sdxl = "sdxl" in target_lower
+
+    if not torch.cuda.is_available() and ("flux" in target_lower or is_sdxl):
         if USE_INFERENCE_API:
             token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
             client = InferenceClient(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
@@ -147,12 +168,35 @@ def _build_pipeline(target_model: str):
     if "flux" in target_lower:
         return FluxPipeline.from_pretrained(target_model, torch_dtype=DTYPE), "flux", target_model, ""
 
+    if is_sdxl:
+        # SDXL is much heavier than SD2; avoid fp16 on CPU.
+        sdxl_dtype = DTYPE if torch.cuda.is_available() else torch.float32
+        sdxl_pipe = StableDiffusionXLPipeline.from_pretrained(
+            target_model,
+            torch_dtype=sdxl_dtype,
+            safety_checker=None,
+            requires_safety_checker=False,
+        )
+        return sdxl_pipe, "sdxl", target_model, ""
+
     sd_pipe = StableDiffusionPipeline.from_pretrained(
         target_model,
         torch_dtype=torch.float32 if not torch.cuda.is_available() else DTYPE,
         safety_checker=None,
     )
     return sd_pipe, "sd", target_model, ""
+
+
+def _build_img2img_pipeline(base_pipe, kind: str):
+    if kind.startswith("remote-"):
+        return None
+    if kind == "flux":
+        return FluxImg2ImgPipeline(**base_pipe.components)
+    if kind in {"sd", "cpu-fallback"}:
+        return StableDiffusionImg2ImgPipeline(**base_pipe.components)
+    if kind == "sdxl":
+        return StableDiffusionXLImg2ImgPipeline(**base_pipe.components)
+    return None
 
 
 def _status_text() -> str:
@@ -184,11 +228,12 @@ def _status_text() -> str:
 
 
 def switch_model(target_model: str) -> str:
-    global pipe, pipeline_kind, requested_model_id, effective_model_id, last_model_note, lora_active
+    global pipe, img2img_pipe, pipeline_kind, requested_model_id, effective_model_id, last_model_note, lora_active
     global active_lora_repo, active_lora_weight_name
 
     with MODEL_LOCK:
         previous_pipe = pipe
+        previous_img2img_pipe = img2img_pipe
         previous_kind = pipeline_kind
         previous_requested = requested_model_id
         previous_effective = effective_model_id
@@ -199,13 +244,17 @@ def switch_model(target_model: str) -> str:
 
         try:
             next_pipe, next_kind, next_effective, load_note = _build_pipeline(target_model)
+            next_img2img_pipe = _build_img2img_pipeline(next_pipe, next_kind)
             _apply_common_pipeline_tuning(next_pipe)
+            if next_img2img_pipe is not None:
+                _apply_common_pipeline_tuning(next_img2img_pipe)
             startup_lora_repo, startup_lora_weight = _pick_lora_spec_for_subject("horreo")
             lora_note, lora_loaded = _try_load_lora(
                 next_pipe, next_kind, startup_lora_repo, startup_lora_weight
             )
 
             pipe = next_pipe
+            img2img_pipe = next_img2img_pipe
             pipeline_kind = next_kind
             requested_model_id = target_model
             effective_model_id = next_effective
@@ -218,12 +267,15 @@ def switch_model(target_model: str) -> str:
 
             if previous_pipe is not None:
                 del previous_pipe
+            if previous_img2img_pipe is not None:
+                del previous_img2img_pipe
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
             return _status_text()
         except Exception as exc:
             pipe = previous_pipe
+            img2img_pipe = previous_img2img_pipe
             pipeline_kind = previous_kind
             requested_model_id = previous_requested
             effective_model_id = previous_effective
@@ -244,7 +296,7 @@ def _ensure_subject_lora(subject: str) -> None:
         active_lora_weight_name = ""
         return
 
-    if pipeline_kind.startswith("remote-") or pipeline_kind != "flux":
+    if pipeline_kind.startswith("remote-") or pipeline_kind not in {"flux", "sd"}:
         lora_active = False
         active_lora_repo = ""
         active_lora_weight_name = ""
@@ -275,16 +327,20 @@ def build_prompt(subject: str, details: str) -> str:
     token_muino = TOKEN_MUINO if lora_active else ""
     subject_map = {
         "horreo": (
-            f"{token_horreo} traditional Galician horreo (horreo gallego), "
-            "elongated rectangular raised granary on granite pegollos with circular tornarratos capstones, "
-            "ventilated slatted stone or wood chamber, gabled tile or slate roof with cruz and pinaculo finials, "
-            "full exterior visible, weathered granite and moss, rural Galicia, no modern house, no interior"
+            f"{token_horreo} traditional Galician granary called horreo, elevated high above ground on four "
+            "cylindrical stone pegollos with tornarratos, granite feet (pies) with tornaformigas, "
+            "rectangular wooden slatted chamber with ventilation gaps and horizontal fajas, "
+            "interior lintel (dintel interior), wooden door with penal lock, dark gray slate roof with sobrepens "
+            "and cornisa, pinche and cross adornos, weathered gray wood and granite, full exterior visible, "
+            "rural Galicia, no stairs, no interior, not Asturian style, "
+            "pies_granito, tornaformigas, pegollos_cilindricos, tornarratos, duelas_tablillas, fajas_horizontales, "
+            "dintel_interior, penal_cerradura, sobrepens, cornisa_dintel, pinche, adornos_cruz"
         ),
         "cruceiro": (
-            f"{token_cruceiro} traditional Galician cruceiro de granito, "
-            "stepped pedestal (gradas), tall monolithic shaft (varal) with carved capital, "
-            "latin cross with Cristo on front and Virxe on reverse, full monument visible, "
-            "weathered granite with lichen, churchyard or crossroads, rural Galicia"
+            f"{token_cruceiro} traditional Galician cruceiro de granito, square stepped base (gradas), "
+            "octagonal shaft (varal) with carved motifs, decorated capital, latin cross with flared arms, "
+            "full monument visible, weathered granite with moss and lichen, churchyard or crossroads, rural Galicia, "
+            "plataforma_escalonada, pousadoiro, fuste_octogonal, ofrenda_votiva, capitel_volutas"
         ),
         "muino": (
             f"{token_muino} traditional Galician muino (water mill), "
@@ -295,10 +351,35 @@ def build_prompt(subject: str, details: str) -> str:
         ),
     }
     base = subject_map.get(subject, subject)
-    return (
-        f"ethnographic documentary photography, {base}, "
-        f"stone and wood textures, natural light, realistic details, {details}"
-    )
+    sd_boost_map = {
+        "horreo": (
+            "(horreo gallego:1.4), (Galician granary:1.3), (elevated on stone pegollos:1.3), "
+            "(four cylindrical stone pillars:1.2), (wooden slatted walls:1.2), (slate roof tairona:1.2), "
+            "(pies stone base:1.2), (tornaformigas ant guards:1.1), (tornarratos rat guards:1.2), "
+            "(duelas tablillas with gaps:1.2), (fajas horizontales:1.1), (dintel interior:1.1), "
+            "(penal lock:1.1), (sobrepens eaves:1.2), (cornisa dintel:1.2), (pinche pinnacle:1.1), "
+            "(adornos cross:1.1), (no stairs:1.4), (not Asturian horreo:1.3)"
+        ),
+        "cruceiro": (
+            "(cruceiro gallego:1.4), (granite wayside cross:1.3), (stepped base:1.3), "
+            "(octagonal shaft:1.3), (decorated capital:1.2), (latin stone cross:1.2), "
+            "(Galician rural heritage:1.2)"
+        ),
+        "muino": "",
+        "mixed": "",
+    }
+    sd_boost = sd_boost_map.get(subject, "") if pipeline_kind in {"sd", "cpu-fallback"} else ""
+    chunks = [
+        "ethnographic documentary photography",
+        base,
+        "stone and wood textures",
+        "natural light",
+        "realistic details",
+        details,
+    ]
+    if sd_boost:
+        chunks.append(sd_boost)
+    return ", ".join(chunks)
 
 
 def suggest_details(subject: str) -> str:
@@ -340,6 +421,9 @@ def recommended_preset():
 
     if kind == "flux" or kind.startswith("remote-"):
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
+    if kind == "sdxl":
+        # SDXL Turbo is designed for very low steps.
+        return (4, 3.0, 512, "stable", False, DEFAULT_NEGATIVE)
     if kind == "cpu-fallback":
         return (1, 0.0, 512, "stable", False, DEFAULT_NEGATIVE)
     # Generic SD pipeline (higher-quality but slower).
@@ -362,6 +446,9 @@ def generate(
     subject: str,
     details: str,
     negative_details: str,
+    generation_mode: str,
+    init_image,
+    img2img_strength: float,
     seed: int,
     steps: int,
     guidance: float,
@@ -377,6 +464,7 @@ def generate(
         _ensure_subject_lora(subject)
         prompt = build_prompt(subject, details)
         active_pipe = pipe
+        active_img2img_pipe = img2img_pipe
         active_kind = pipeline_kind
         status_snapshot = _status_text()
 
@@ -396,10 +484,24 @@ def generate(
         if negative_text and active_kind in {"cpu-fallback", "sd"}:
             kwargs["negative_prompt"] = negative_text
 
-        if active_kind == "flux":
-            kwargs["max_sequence_length"] = use_seq_len
+        if generation_mode == "image-to-image":
+            if init_image is None:
+                raise gr.Error("Sube una imagen de referencia para usar image-to-image.")
+            if active_kind.startswith("remote-"):
+                raise gr.Error(
+                    "Image-to-image no está disponible con FLUX en modo remoto (Inference API). "
+                    "Usa SD2 o cambia el hardware del Space a GPU para FLUX local."
+                )
+            if active_img2img_pipe is None:
+                raise gr.Error("Image-to-image no está disponible para el modelo activo.")
 
-        if active_kind.startswith("remote-"):
+            reference_image = init_image.convert("RGB").resize((use_resolution, use_resolution))
+            kwargs["image"] = reference_image
+            kwargs["strength"] = max(0.05, min(1.0, float(img2img_strength)))
+            if active_kind == "flux":
+                kwargs["max_sequence_length"] = use_seq_len
+            image = active_img2img_pipe(**kwargs).images[0]
+        elif active_kind.startswith("remote-"):
             try:
                 image = active_pipe.text_to_image(
                     prompt,
@@ -418,6 +520,8 @@ def generate(
                     f"Error: {exc}"
                 ) from exc
         else:
+            if active_kind == "flux":
+                kwargs["max_sequence_length"] = use_seq_len
             image = active_pipe(**kwargs).images[0]
 
     return image, prompt, status_snapshot
@@ -427,10 +531,10 @@ def generate(
 switch_model(BASE_MODEL)
 INIT_STEPS, INIT_GUIDANCE, INIT_RESOLUTION, INIT_QUALITY, INIT_FAST_MODE, INIT_NEGATIVE = recommended_preset()
 
-with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
+with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
     gr.Markdown(
-        "# Galicia Ethnography Generator\n"
-        f"Generate images of **horreos**, **cruceiros** and **muinos** and switch models from the UI.\n\n"
+        "# Generador de Etnografía Gallega\n"
+        f"Genera imágenes de **hórreos**, **cruceiros** y **muiños** y cambia de modelo desde la interfaz.\n\n"
         f"`app_version: {APP_VERSION}`"
     )
 
@@ -438,51 +542,70 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
         model_selector = gr.Dropdown(
             choices=MODEL_CHOICES,
             value=BASE_MODEL if BASE_MODEL in MODEL_CHOICES else MODEL_CHOICES[0],
-            label="Model",
+            label="Modelo",
         )
-        apply_model_btn = gr.Button("Apply Model")
+        apply_model_btn = gr.Button("Aplicar modelo")
 
     model_status = gr.Markdown(_status_text())
     gr.Markdown(
-        "Preset recomendado activo. Si cambias el modelo, pulsa `Apply Model` para reajustar los valores."
+        "Preset recomendado activo. Si cambias el modelo, pulsa `Aplicar modelo` para reajustar los valores."
     )
-    gr.Markdown("Tip: on `cpu-basic`, FLUX runs via remote API and LoRA is disabled in remote mode.")
+    gr.Markdown("Consejo: en `cpu-basic`, FLUX se ejecuta vía API remota y LoRA está desactivado en modo remoto.")
 
     with gr.Row():
         subject = gr.Dropdown(
             choices=["horreo", "cruceiro", "muino", "mixed"],
             value="horreo",
-            label="Subject",
+            label="Tema",
         )
         details = gr.Textbox(
             value=SUBJECT_DETAIL_PRESETS["horreo"],
-            label="Prompt details",
+            label="Detalles del prompt",
         )
 
     negative_details = gr.Textbox(
         value=INIT_NEGATIVE,
-        label="Negative prompt (for SD pipelines)",
+        label="Prompt negativo (para pipelines SD)",
     )
 
     with gr.Row():
-        seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Seed")
-        steps = gr.Slider(minimum=1, maximum=60, value=INIT_STEPS, step=1, label="Steps")
-        guidance = gr.Slider(minimum=0.0, maximum=12.0, value=INIT_GUIDANCE, step=0.1, label="Guidance")
-        resolution = gr.Slider(minimum=512, maximum=1024, value=INIT_RESOLUTION, step=64, label="Resolution")
+        generation_mode = gr.Radio(
+            choices=[("texto-a-imagen", "text-to-image"), ("imagen-a-imagen", "image-to-image")],
+            value="text-to-image",
+            label="Modo de generación",
+        )
+        img2img_strength = gr.Slider(
+            minimum=0.15,
+            maximum=0.95,
+            value=0.55,
+            step=0.05,
+            label="Fuerza de la imagen (img2img)",
+        )
+
+    init_image = gr.Image(
+        type="pil",
+        label="Imagen de referencia (para imagen-a-imagen)",
+    )
+
+    with gr.Row():
+        seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Semilla")
+        steps = gr.Slider(minimum=1, maximum=60, value=INIT_STEPS, step=1, label="Pasos")
+        guidance = gr.Slider(minimum=0.0, maximum=12.0, value=INIT_GUIDANCE, step=0.1, label="Orientación")
+        resolution = gr.Slider(minimum=512, maximum=1024, value=INIT_RESOLUTION, step=64, label="Resolución")
 
     with gr.Row():
         quality_profile = gr.Dropdown(
-            choices=["stable", "fast", "balanced", "quality"],
+            choices=[("estable", "stable"), ("rápido", "fast"), ("equilibrado", "balanced"), ("calidad", "quality")],
             value=INIT_QUALITY,
-            label="Quality profile",
+            label="Perfil de calidad",
         )
-        fast_mode = gr.Checkbox(value=INIT_FAST_MODE, label="Fast mode")
+        fast_mode = gr.Checkbox(value=INIT_FAST_MODE, label="Modo rápido")
 
     with gr.Row():
-        stable_preset_btn = gr.Button("Apply Stable Quality")
-        run_btn = gr.Button("Generate")
-    output_image = gr.Image(label="Result", type="pil")
-    output_prompt = gr.Textbox(label="Final prompt")
+        stable_preset_btn = gr.Button("Aplicar calidad estable")
+        run_btn = gr.Button("Generar")
+    output_image = gr.Image(label="Resultado", type="pil")
+    output_prompt = gr.Textbox(label="Prompt final")
 
     apply_model_btn.click(
         fn=switch_model_and_apply_preset,
@@ -504,7 +627,20 @@ with gr.Blocks(title="Galicia Horreos and Cruceiros") as demo:
 
     run_btn.click(
         fn=generate,
-        inputs=[subject, details, negative_details, seed, steps, guidance, resolution, fast_mode, quality_profile],
+        inputs=[
+            subject,
+            details,
+            negative_details,
+            generation_mode,
+            init_image,
+            img2img_strength,
+            seed,
+            steps,
+            guidance,
+            resolution,
+            fast_mode,
+            quality_profile,
+        ],
         outputs=[output_image, output_prompt, model_status],
     )
 
