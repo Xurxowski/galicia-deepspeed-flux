@@ -534,6 +534,7 @@ def generate(
                     "- Add `HF_TOKEN` as a Space secret\n"
                     "- Accept the model license on its model page\n\n"
                     f"Model: `{effective_model_id}`\n"
+                    f"Pipeline: `{active_kind}`\n"
                     f"Error: {exc!r}"
                 ) from exc
         else:
@@ -625,6 +626,12 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
     output_prompt = gr.Textbox(label="Prompt final")
 
     apply_model_btn.click(
+        fn=switch_model_and_apply_preset,
+        inputs=[model_selector],
+        outputs=[model_status, steps, guidance, resolution, quality_profile, fast_mode, negative_details],
+    )
+
+    model_selector.change(
         fn=switch_model_and_apply_preset,
         inputs=[model_selector],
         outputs=[model_status, steps, guidance, resolution, quality_profile, fast_mode, negative_details],
