@@ -20,6 +20,18 @@ BASE_MODEL = os.getenv("BASE_MODEL", "black-forest-labs/FLUX.1-schnell")
 CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "LanguageMachines/stable-diffusion-2-1-base")
 USE_INFERENCE_API = os.getenv("USE_INFERENCE_API", "1").strip().lower() not in {"0", "false", "no", "off"}
 INFERENCE_TIMEOUT_SEC = float(os.getenv("INFERENCE_TIMEOUT_SEC", "120"))
+REMOTE_TXT2IMG_MODEL = os.getenv(
+    "REMOTE_TXT2IMG_MODEL", "stabilityai/sdxl-turbo"
+).strip()
+REMOTE_IMG2IMG_MODEL = os.getenv(
+    "REMOTE_IMG2IMG_MODEL", "radames/stable-diffusion-v1-5-img2img"
+).strip()
+IMG2IMG_SPACE = os.getenv("IMG2IMG_SPACE", "fffiloni/stable-diffusion-img2img").strip()
+IMG2IMG_API_NAME = os.getenv("IMG2IMG_API_NAME", "/predict").strip() or "/predict"
+IMG2IMG_UPLOAD_ENDPOINT = os.getenv("IMG2IMG_UPLOAD_ENDPOINT", "/gradio_api/upload").strip() or "/gradio_api/upload"
+IMG2IMG_RUN_ENDPOINT = os.getenv("IMG2IMG_RUN_ENDPOINT", "/gradio_api/run/predict").strip() or "/gradio_api/run/predict"
+IMG2IMG_FN_INDEX = int(os.getenv("IMG2IMG_FN_INDEX", "0").strip() or "0")
+UPSCALE_MODEL = os.getenv("UPSCALE_MODEL", "")
 LORA_REPO = os.getenv("LORA_REPO", "")
 LORA_REPO_HORREO = os.getenv("LORA_REPO_HORREO", "")
 LORA_REPO_CRUCEIRO = os.getenv("LORA_REPO_CRUCEIRO", "")
@@ -32,13 +44,15 @@ LORA_TARGET = os.getenv("LORA_TARGET", "flux").strip().lower()  # flux|sd|both|a
 TOKEN_HORREO = os.getenv("TOKEN_HORREO", "<gal_horreo>")
 TOKEN_CRUCEIRO = os.getenv("TOKEN_CRUCEIRO", "<gal_cruceiro>")
 TOKEN_MUINO = os.getenv("TOKEN_MUINO", "<gal_muino>")
-APP_VERSION = os.getenv("APP_VERSION", "2026-02-28-1")
+APP_VERSION = os.getenv("APP_VERSION", "2026-03-02-4")
 
 MODEL_CHOICES = [
     "black-forest-labs/FLUX.1-schnell",
     "LanguageMachines/stable-diffusion-2-1-base",
     "stabilityai/sdxl-turbo",
     "stabilityai/stable-diffusion-xl-base-1.0",
+    "ByteDance/SDXL-Lightning",
+    "RunDiffusion/Juggernaut-XL-v9",
 ]
 
 def _pick_torch_dtype() -> torch.dtype:
@@ -55,10 +69,12 @@ GENERATOR_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DEFAULT_QUALITY = "stable"
 DEFAULT_NEGATIVE = (
     "blurry, low quality, watermark, text, logo, deformed geometry, modern elements, "
-    "modern cross, cemetery, gravestone, wooden cross, metal cross, church interior, "
+    "modern cross, minimalist cross, abstract cross, cemetery, graveyard, gravestone, tombstone, headstone, "
+    "grave marker, burial ground, wooden cross, metal cross, church interior, "
+    "celtic cross with circle, irish cross, scottish cross, "
     "asturian horreo, square stone pillars, round pegollos, wooden pillars, stairs, ground-level granary, "
     "thatched roof, modern barn, metal roof, concrete base, generic christian cross, calvary, "
-    "close-up crop, interior view, apartment building, cabin, chalet"
+    "close-up, cropped, cut off, partial monument, close-up crop, interior view, apartment building, cabin, chalet"
 )
 SUBJECT_DETAIL_PRESETS = {
     "horreo": (
@@ -69,11 +85,13 @@ SUBJECT_DETAIL_PRESETS = {
         "pinche and cross adornos on ridge, no stairs, not Asturian, full exterior visible, rural Galicia"
     ),
     "cruceiro": (
-        "traditional Galician cruceiro in granite, square stepped base with three tiers, "
-        "octagonal shaft with carved geometric motifs, decorated capital with vegetal/volute motifs, "
-        "latin cross with flared arms, full monument visible, weathered granite with lichen and moss, "
-        "rural Galicia (crossroads or churchyard), overcast atlantic daylight, "
-        "plataforma_escalonada, pousadoiro, fuste_octogonal"
+        "traditional Galician cruceiro, weathered gray granite, rural Galicia, overcast sky, "
+        "full monument visible, no cropping, centered composition, wide long shot, vertical framing, "
+        "stepped stone platform base (plataforma escalonada) with stone bench (pousadoiro), "
+        "pedestal, very tall slender octagonal shaft (fuste/varal) with carved geometric patterns, "
+        "votive offering figure or saint on the shaft, decorated capital with scroll volutes, "
+        "small latin cross on top, shaft 6x to 8x taller than the cross, cross occupies only the top 10 to 15 percent of total height, "
+        "photorealistic architectural documentary photo, realistic proportions, sharp stone texture, moss, lichen"
     ),
     "muino": (
         "stone millhouse beside flowing water, weathered granite and moss, "
@@ -84,6 +102,95 @@ SUBJECT_DETAIL_PRESETS = {
         "rural Galicia, natural daylight, documentary realism"
     ),
 }
+
+MODEL_SUBJECT_DETAIL_PRESETS = {
+    "flux": {
+        "horreo": (
+            "A traditional Galician granary called horreo, elevated structure on stone pillars, "
+            "granite base feet (pies) with ant guards (tornaformigas) at ground level, "
+            "tall cylindrical stone pillars (pegollos) raising the structure high, "
+            "rat guards (tornarratos) on the pillars, rectangular wooden chest construction, "
+            "vertical wooden slats (duelas or tablillas) with gaps for ventilation, "
+            "horizontal wooden bands (fajas) reinforcing the walls, "
+            "interior lintel (dintel interior) framing the doorway, "
+            "wooden door with traditional lock mechanism (penal), "
+            "sloped slate roof with overhanging eaves (sobrepens), decorative cornice (cornisa), "
+            "small pinnacle (pinche) and cross adornment (adornos) at roof peak, "
+            "weathered gray wood texture, dark gray slate tiles, no stairs, elevated on pillars only, "
+            "rural Galician farm setting, green fields, photorealistic, detailed wood grain"
+        ),
+        "cruceiro": (
+            "Traditional Galician cruceiro, weathered gray granite, rural Galicia, overcast sky. "
+            "Full monument visible (no cropping), centered wide long shot, vertical framing. "
+            "Stepped stone platform base (plataforma escalonada) with stone bench (pousadoiro). "
+            "Pedestal + very tall slender octagonal shaft (fuste/varal) with carved geometric patterns, "
+            "votive offering figure/saint on the shaft, decorated capital with scroll volutes. "
+            "Small Latin cross on top: shaft 6x to 8x taller than the cross, cross occupies only the top 10 to 15 percent of total height. "
+            "Photorealistic architectural documentary photo, realistic proportions, sharp stone texture, moss and lichen. "
+            "No cemetery, no graveyard."
+        ),
+        "muino": (
+            "Traditional Galician muino (water mill), small stone millhouse beside a stream, mossy granite, "
+            "rural Galicia, overcast atlantic light, documentary realism, full building visible"
+        ),
+        "mixed": (
+            "Traditional Galician horreo and a Galician cruceiro in the same rural ethnographic scene, "
+            "both fully visible, wide shot, documentary realism, overcast atlantic light"
+        ),
+    },
+    "sdxl_fast": {
+        "horreo": (
+            "Galician horreo (traditional granary), elevated high on cylindrical stone pegollos, "
+            "tornaformigas, tornarratos, wooden slatted walls, slate roof, rural Galicia, photorealistic"
+        ),
+        "cruceiro": (
+            "Galician cruceiro in granite, full monument visible, wide shot, stepped base, octagonal shaft, "
+            "decorated capital, small latin cross on top, rural Galicia, photorealistic"
+        ),
+        "muino": (
+            "Galician stone water millhouse beside a stream, mossy granite, rural Galicia, photorealistic"
+        ),
+        "mixed": (
+            "Galician horreo and Galician cruceiro together, both fully visible, rural Galicia, photorealistic"
+        ),
+    },
+    "sdxl_quality": {
+        "horreo": (
+            "Traditional Galician horreo, elevated on cylindrical stone pegollos with tornaformigas, tornarratos, "
+            "wooden slatted chamber with fajas, slate roof with sobrepens, rural Galicia, architectural documentary photo, wide shot"
+        ),
+        "cruceiro": (
+            "Traditional Galician cruceiro de granito, full monument visible, wide long shot, stepped base, pousadoiro, "
+            "octagonal shaft with carved motifs, decorated capital with scroll volutes, small latin cross on top, "
+            "realistic proportions, sharp granite texture with moss and lichen, rural Galicia, overcast sky"
+        ),
+        "muino": (
+            "Traditional Galician muino (water mill), stone millhouse beside a stream, mossy granite, rural Galicia, "
+            "architectural documentary photo, wide shot"
+        ),
+        "mixed": (
+            "Traditional Galician horreo and cruceiro together in rural Galicia, both fully visible, wide shot, "
+            "architectural documentary photo, overcast atlantic daylight"
+        ),
+    },
+}
+
+MODEL_NEGATIVE_PRESETS = {
+    "flux": (
+        "cemetery, graveyard, tombstone, grave marker, headstone, burial ground, "
+        "modern metal cross, wooden cross, minimalist cross, abstract cross, "
+        "celtic cross with circle, Irish cross, Scottish cross, church interior, "
+        "close-up, cropped, cut off, partial monument"
+    ),
+    "sdxl": DEFAULT_NEGATIVE,
+    "sd": DEFAULT_NEGATIVE,
+}
+
+HORREO_VARIANT_CHOICES = [
+    ("madera (tablillas)", "wood"),
+    ("piedra (lajas/perpiaño)", "stone"),
+    ("mixto (madera + piedra)", "mixed"),
+]
 
 pipe = None
 img2img_pipe = None
@@ -143,18 +250,32 @@ def _try_load_lora(current_pipe, kind: str, lora_repo: str, lora_weight_name: st
 def _build_pipeline(target_model: str):
     target_lower = target_model.lower()
 
-    is_sdxl = "sdxl" in target_lower
+    # Some SDXL finetunes do not include the string "sdxl" in their repo id (e.g. Juggernaut-XL).
+    # Use a conservative heuristic to treat common "XL" checkpoints as SDXL-compatible.
+    is_sdxl = (
+        "sdxl" in target_lower
+        or (
+            "xl" in target_lower
+            and "stable-diffusion-2" not in target_lower
+            and "stable-diffusion-1" not in target_lower
+            and "sd-2" not in target_lower
+            and "sd-1" not in target_lower
+        )
+    )
 
-    if not torch.cuda.is_available() and ("flux" in target_lower or is_sdxl):
-        if USE_INFERENCE_API:
-            token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
-            client = InferenceClient(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
-            note = (
-                f"CPU runtime detected: using Hugging Face Inference API for `{target_model}`.\n"
-                "If generation fails, add `HF_TOKEN` as a Space secret and ensure you accepted the model license."
-            )
-            return client, f"remote-{target_model.split('/')[-1].lower()}", target_model, note
+    if not torch.cuda.is_available() and USE_INFERENCE_API:
+        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
+        client_kwargs = dict(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
+        if token:
+            client_kwargs["provider"] = "hf-inference"
+        client = InferenceClient(**client_kwargs)
+        note = (
+            f"CPU runtime detected: using Hugging Face Inference API for `{target_model}`.\n"
+            "If generation fails, add `HF_TOKEN` as a Space secret and ensure you accepted the model license."
+        )
+        return client, f"remote-{target_model.split('/')[-1].lower()}", target_model, note
 
+    if not torch.cuda.is_available() and not USE_INFERENCE_API and ("flux" in target_lower or is_sdxl):
         cpu_pipe = StableDiffusionPipeline.from_pretrained(
             CPU_FALLBACK_MODEL,
             torch_dtype=torch.float32,
@@ -206,6 +327,13 @@ def _status_text() -> str:
         f"Active model: `{effective_model_id}` | "
         f"Pipeline: `{pipeline_kind}`"
     )
+    base += f"\nRemote img2img backend: `{IMG2IMG_SPACE or 'disabled'}`"
+    base += (
+        f"\nRemote img2img upload: `{IMG2IMG_UPLOAD_ENDPOINT}` | run: `{IMG2IMG_RUN_ENDPOINT}` "
+        f"(fn_index={IMG2IMG_FN_INDEX})"
+    )
+    base += f"\nRemote img2img model: `{REMOTE_IMG2IMG_MODEL}`"
+    base += f"\nRemote txt2img fallback: `{REMOTE_TXT2IMG_MODEL}`"
     if lora_active and active_lora_repo:
         if active_lora_weight_name:
             base += f" | LoRA: `{active_lora_repo}` (`{active_lora_weight_name}`)"
@@ -387,6 +515,39 @@ def suggest_details(subject: str) -> str:
     return SUBJECT_DETAIL_PRESETS.get(subject, SUBJECT_DETAIL_PRESETS["horreo"])
 
 
+def _model_family_from_id(model_id: str) -> str:
+    lower = (model_id or "").lower()
+    if "flux" in lower:
+        return "flux"
+    if "sdxl-turbo" in lower:
+        return "sdxl_fast"
+    if "sdxl-lightning" in lower:
+        return "sdxl_fast"
+    if "juggernaut" in lower:
+        return "sdxl_quality"
+    if "stable-diffusion-xl" in lower or lower.endswith("sdxl-base-1.0"):
+        return "sdxl_quality"
+    return "sd"
+
+
+def suggest_details_for_model(subject: str, model_id: str) -> tuple[str, str]:
+    family = _model_family_from_id(model_id)
+    details = MODEL_SUBJECT_DETAIL_PRESETS.get(family, SUBJECT_DETAIL_PRESETS).get(
+        subject, SUBJECT_DETAIL_PRESETS.get(subject, SUBJECT_DETAIL_PRESETS["horreo"])
+    )
+    if family == "flux":
+        negative = MODEL_NEGATIVE_PRESETS["flux"]
+    elif family.startswith("sdxl"):
+        negative = MODEL_NEGATIVE_PRESETS["sdxl"]
+    else:
+        negative = MODEL_NEGATIVE_PRESETS["sd"]
+    return details, negative
+
+
+def horreo_variant_update(subject: str):
+    return gr.update(visible=subject == "horreo")
+
+
 def normalize_resolution(resolution: int) -> int:
     clamped = max(512, min(1024, int(resolution)))
     return (clamped // 64) * 64
@@ -422,9 +583,14 @@ def recommended_preset():
 
     if kind.startswith("remote-"):
         # Remote Inference API is usually queued / shared; keep defaults small for responsiveness.
-        if "sdxl-turbo" in effective_model_id.lower():
+        effective_lower = model_id.lower()
+        if "sdxl-turbo" in effective_lower:
             # SDXL Turbo is trained for guidance_scale=0 and 512px.
             return (4, 0.0, 512, "fast", True, DEFAULT_NEGATIVE)
+        if "sdxl-lightning" in effective_lower:
+            return (4, 1.5, 640, "fast", True, DEFAULT_NEGATIVE)
+        if "juggernaut" in effective_lower:
+            return (8, 4.0, 640, "stable", False, DEFAULT_NEGATIVE)
         return (3, 3.0, 640, "fast", True, DEFAULT_NEGATIVE)
     if kind == "flux":
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
@@ -442,11 +608,99 @@ def apply_stable_preset():
         *recommended_preset(),
     )
 
+def generation_mode_update():
+    with MODEL_LOCK:
+        kind = pipeline_kind
+        model_id = effective_model_id
 
-def switch_model_and_apply_preset(target_model: str):
+    effective_lower = model_id.lower()
+    is_sdxl_turbo = "sdxl-turbo" in effective_lower
+    is_sdxl_model = (
+        "sdxl" in effective_lower
+        or (
+            "xl" in effective_lower
+            and "stable-diffusion-2" not in effective_lower
+            and "stable-diffusion-1" not in effective_lower
+            and "sd-2" not in effective_lower
+            and "sd-1" not in effective_lower
+        )
+    )
+
+    is_sd2_model = (
+        "stable-diffusion-2" in effective_lower
+        or "sd-2" in effective_lower
+        or "sd2" in effective_lower
+    )
+
+    img2img_supported = False
+    if kind.startswith("remote-"):
+        img2img_supported = (is_sdxl_model or is_sd2_model) and not is_sdxl_turbo
+    else:
+        img2img_supported = img2img_pipe is not None
+
+    if img2img_supported:
+        return gr.update(
+            choices=[("texto-a-imagen", "text-to-image"), ("imagen-a-imagen", "image-to-image")],
+            value="text-to-image",
+        )
+    return gr.update(choices=[("texto-a-imagen", "text-to-image")], value="text-to-image")
+
+
+def img2img_controls_update():
+    with MODEL_LOCK:
+        kind = pipeline_kind
+        model_id = effective_model_id
+        has_local_i2i = img2img_pipe is not None
+
+    effective_lower = model_id.lower()
+    is_sdxl_turbo = "sdxl-turbo" in effective_lower
+    is_sdxl_model = (
+        "sdxl" in effective_lower
+        or (
+            "xl" in effective_lower
+            and "stable-diffusion-2" not in effective_lower
+            and "stable-diffusion-1" not in effective_lower
+            and "sd-2" not in effective_lower
+            and "sd-1" not in effective_lower
+        )
+    )
+
+    is_sd2_model = (
+        "stable-diffusion-2" in effective_lower
+        or "sd-2" in effective_lower
+        or "sd2" in effective_lower
+    )
+
+    if kind.startswith("remote-"):
+        visible = (is_sdxl_model or is_sd2_model) and not is_sdxl_turbo
+    else:
+        visible = has_local_i2i
+
+    return (
+        gr.update(visible=visible),
+        gr.update(visible=visible),
+    )
+
+
+def switch_model_and_apply_preset(target_model: str, subject: str):
     status = switch_model(target_model)
     steps, guidance, resolution, quality_profile, fast_mode, negative = recommended_preset()
-    return status, steps, guidance, resolution, quality_profile, fast_mode, negative
+    mode_update = generation_mode_update()
+    init_image_update, strength_update = img2img_controls_update()
+    details_text, negative_text = suggest_details_for_model(subject, target_model)
+    return (
+        status,
+        steps,
+        guidance,
+        resolution,
+        quality_profile,
+        fast_mode,
+        negative_text,
+        mode_update,
+        init_image_update,
+        strength_update,
+        details_text,
+    )
 
 
 def generate(
@@ -455,6 +709,7 @@ def generate(
     negative_details: str,
     generation_mode: str,
     init_image,
+    horreo_variant: str,
     img2img_strength: float,
     seed: int,
     steps: int,
@@ -469,7 +724,16 @@ def generate(
 
     with MODEL_LOCK:
         _ensure_subject_lora(subject)
-        prompt = build_prompt(subject, details)
+        prompt_details = details
+        if subject == "horreo":
+            if horreo_variant == "stone":
+                prompt_details = f"{prompt_details}, stone wall panels, granite slabs, perpiaño stonework"
+            elif horreo_variant == "mixed":
+                prompt_details = f"{prompt_details}, mixed materials, some stone wall panels and some wooden slats"
+            else:
+                prompt_details = f"{prompt_details}, wooden slats on wall panels"
+
+        prompt = build_prompt(subject, prompt_details)
         active_pipe = pipe
         active_img2img_pipe = img2img_pipe
         active_kind = pipeline_kind
@@ -478,7 +742,26 @@ def generate(
 
     effective_lower = active_effective_model_id.lower()
     is_sdxl_turbo = "sdxl-turbo" in effective_lower
-    is_sdxl_base = "stable-diffusion-xl" in effective_lower or effective_lower.endswith("sdxl-base-1.0")
+    is_sdxl_model = (
+        "sdxl" in effective_lower
+        or (
+            "xl" in effective_lower
+            and "stable-diffusion-2" not in effective_lower
+            and "stable-diffusion-1" not in effective_lower
+            and "sd-2" not in effective_lower
+            and "sd-1" not in effective_lower
+        )
+    )
+    is_sd2_model = (
+        "stable-diffusion-2" in effective_lower
+        or "sd-2" in effective_lower
+        or "sd2" in effective_lower
+    )
+    remote_img2img_supported = (
+        active_kind.startswith("remote-")
+        and (is_sdxl_model or is_sd2_model)
+        and not is_sdxl_turbo
+    )
 
     generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
 
@@ -500,45 +783,192 @@ def generate(
             if init_image is None:
                 raise gr.Error("Sube una imagen de referencia para usar image-to-image.")
             if active_kind.startswith("remote-"):
-                if not is_sdxl_base:
+                if not remote_img2img_supported:
                     raise gr.Error(
-                        "Image-to-image en modo remoto (Inference API) solo está habilitado para `SDXL Base` en este Space. "
+                        "Image-to-image en modo remoto (Inference API) solo está habilitado para modelos SDXL/SD2 (no Turbo) en este Space. "
                         "Para FLUX/SDXL Turbo remotos usa `texto-a-imagen`."
                     )
 
                 reference_image = init_image.convert("RGB").resize((use_resolution, use_resolution))
                 try:
-                    result = active_pipe.image_to_image(
-                        prompt=prompt,
-                        image=reference_image,
-                        strength=max(0.05, min(1.0, float(img2img_strength))),
-                        height=use_resolution,
-                        width=use_resolution,
-                        num_inference_steps=use_steps,
-                        guidance_scale=guidance,
-                    )
+                    import requests
+                    from tempfile import NamedTemporaryFile
+
+                    if not IMG2IMG_SPACE:
+                        raise gr.Error("Remote img2img backend disabled: set IMG2IMG_SPACE.")
+
+                    # Convert `user/space-name` -> `https://user-space-name.hf.space`
+                    space_host = IMG2IMG_SPACE.replace("/", "-")
+                    base_url = f"https://{space_host}.hf.space"
+
+                    strength_value = max(0.05, min(1.0, float(img2img_strength)))
+                    guide_value = float(guidance)
+                    steps_value = int(use_steps)
+                    seed_value = int(seed)
+
+                    with NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp_path = tmp.name
+                    try:
+                        reference_image.save(tmp_path, format="PNG")
+
+                        upload_endpoints = []
+                        if IMG2IMG_UPLOAD_ENDPOINT:
+                            upload_endpoints.append(IMG2IMG_UPLOAD_ENDPOINT)
+                        upload_endpoints.extend(["/gradio_api/upload", "/upload", "/api/upload"])
+
+                        upload_resp = None
+                        upload_errors = []
+
+                        for ep in upload_endpoints:
+                            url = f"{base_url}{ep}"
+                            # Gradio upload endpoints have historically accepted slightly different multipart shapes.
+                            # Try the two common forms:
+                            # - files={"files": (name, fp, mime)}
+                            # - files=[("files", (name, fp, mime))]
+                            for mode in ("dict", "list"):
+                                try:
+                                    with open(tmp_path, "rb") as f:
+                                        if mode == "dict":
+                                            files = {"files": (os.path.basename(tmp_path), f, "image/png")}
+                                        else:
+                                            files = [("files", (os.path.basename(tmp_path), f, "image/png"))]
+                                        resp = requests.post(
+                                            url,
+                                            files=files,
+                                            timeout=INFERENCE_TIMEOUT_SEC,
+                                        )
+                                    if resp.status_code == 404:
+                                        continue
+                                    resp.raise_for_status()
+                                    upload_resp = resp
+                                    break
+                                except Exception as exc:
+                                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                                    body = getattr(getattr(exc, "response", None), "text", None)
+                                    upload_errors.append((url, mode, status, body, repr(exc)))
+                            if upload_resp is not None:
+                                break
+
+                        if upload_resp is None:
+                            raise gr.Error(
+                                "Backend upload failed for all endpoints/modes.\n"
+                                + "\n".join([f"- {u} ({m}) -> {s}: {e}" for (u, m, s, _b, e) in upload_errors])
+                            )
+                        upload_resp.raise_for_status()
+                        upload_json = upload_resp.json()
+
+                        uploaded_path = None
+                        if isinstance(upload_json, str):
+                            uploaded_path = upload_json
+                        elif isinstance(upload_json, dict):
+                            files = upload_json.get("files")
+                            if isinstance(files, list) and files:
+                                item = files[0]
+                                if isinstance(item, dict):
+                                    uploaded_path = item.get("path") or item.get("name")
+                                elif isinstance(item, str):
+                                    uploaded_path = item
+                            uploaded_path = uploaded_path or upload_json.get("path")
+                        elif isinstance(upload_json, list) and upload_json:
+                            item = upload_json[0]
+                            if isinstance(item, dict):
+                                uploaded_path = item.get("path") or item.get("name")
+                            elif isinstance(item, str):
+                                uploaded_path = item
+
+                        if not uploaded_path:
+                            raise gr.Error(f"Could not parse backend upload response: {upload_json!r}")
+
+                        payload = {
+                            "fn_index": IMG2IMG_FN_INDEX,
+                            "data": [
+                                {"path": uploaded_path},
+                                prompt,
+                                guide_value,
+                                steps_value,
+                                seed_value,
+                                strength_value,
+                            ],
+                        }
+                        run_endpoints = []
+                        if IMG2IMG_RUN_ENDPOINT:
+                            run_endpoints.append(IMG2IMG_RUN_ENDPOINT)
+                        run_endpoints.extend(["/gradio_api/run/predict", "/run/predict", "/api/predict"])
+
+                        predict_resp = None
+                        last_run_exc = None
+                        for ep in run_endpoints:
+                            try:
+                                predict_resp = requests.post(
+                                    f"{base_url}{ep}",
+                                    json=payload,
+                                    timeout=INFERENCE_TIMEOUT_SEC,
+                                )
+                                if predict_resp.status_code == 404:
+                                    continue
+                                predict_resp.raise_for_status()
+                                break
+                            except Exception as exc:
+                                last_run_exc = exc
+                                predict_resp = None
+
+                        if predict_resp is None:
+                            raise gr.Error(
+                                f"Backend run failed for endpoints {run_endpoints!r}: {last_run_exc!r}"
+                            )
+                        predict_resp.raise_for_status()
+                        result = predict_resp.json()
+                    finally:
+                        try:
+                            os.remove(tmp_path)
+                        except Exception:
+                            pass
                 except Exception as exc:
                     raise gr.Error(
-                        "Remote Inference API img2img call failed.\n\n"
+                        "Remote img2img call failed (Space backend).\n\n"
                         "Common fixes:\n"
-                        "- Add `HF_TOKEN` as a Space secret\n"
-                        "- Accept the model license on its model page\n\n"
+                        "- The backend Space may be cold-starting or queued; retry in 30-60s\n"
+                        "- Ensure IMG2IMG_SPACE points to a running Space\n"
+                        "- Ensure IMG2IMG_RUN_ENDPOINT and IMG2IMG_FN_INDEX match the backend API\n\n"
+                        f"Remote img2img backend: `{IMG2IMG_SPACE}`\n"
+                        f"Remote img2img upload: `{IMG2IMG_UPLOAD_ENDPOINT}`\n"
+                        f"Remote img2img run: `{IMG2IMG_RUN_ENDPOINT}` (fn_index={IMG2IMG_FN_INDEX})\n"
+                        f"Remote img2img model: `{REMOTE_IMG2IMG_MODEL}`\n"
                         f"Model: `{effective_model_id}`\n"
                         f"Pipeline: `{active_kind}`\n"
                         f"Error: {exc!r}"
                     ) from exc
 
-                # huggingface_hub may return a PIL image or raw bytes depending on backend.
-                if hasattr(result, "convert"):
-                    image = result
-                else:
+                from PIL import Image
+
+                # Gradio HTTP responses usually contain a dict with a `data` field.
+                image = None
+                out_path = None
+                if isinstance(result, dict) and "data" in result and isinstance(result["data"], list) and result["data"]:
+                    out0 = result["data"][0]
+                    if isinstance(out0, dict):
+                        out_path = out0.get("path") or out0.get("name")
+                    elif isinstance(out0, str):
+                        out_path = out0
+
+                if not out_path:
+                    raise gr.Error(f"Remote img2img backend returned unexpected payload: {result!r}")
+
+                # Many Spaces return a temporary path that must be fetched via /file=...
+                try:
+                    if out_path.startswith("http://") or out_path.startswith("https://"):
+                        file_url = out_path
+                    else:
+                        file_url = f"{base_url}/file={out_path.lstrip('/')}"
+                    file_resp = requests.get(file_url, timeout=INFERENCE_TIMEOUT_SEC)
+                    file_resp.raise_for_status()
                     from io import BytesIO
 
-                    from PIL import Image
+                    image = Image.open(BytesIO(file_resp.content)).convert("RGB")
+                except Exception as exc:
+                    raise gr.Error(f"Could not fetch backend image from `{out_path}`: {exc!r}") from exc
 
-                    image = Image.open(BytesIO(result)).convert("RGB")
-
-                return image, prompt, status_snapshot
+                return image, prompt, status_snapshot, gr.update(visible=True)
             if active_img2img_pipe is None:
                 raise gr.Error("Image-to-image no está disponible para el modelo activo.")
 
@@ -563,6 +993,19 @@ def generate(
                     remote_kwargs["height"] = min(remote_kwargs["height"], 512)
                     remote_kwargs["width"] = min(remote_kwargs["width"], 512)
                     remote_kwargs["guidance_scale"] = 0.0
+                elif negative_text:
+                    remote_kwargs["negative_prompt"] = negative_text
+
+                def _is_remote_404(error: Exception) -> bool:
+                    try:
+                        response = getattr(error, "response", None)
+                        status_code = getattr(response, "status_code", None)
+                        if status_code == 404:
+                            return True
+                    except Exception:
+                        pass
+                    text = repr(error)
+                    return "404" in text and "Not Found" in text
 
                 result = active_pipe.text_to_image(**remote_kwargs)
                 if hasattr(result, "convert"):
@@ -574,6 +1017,35 @@ def generate(
 
                     image = Image.open(BytesIO(result)).convert("RGB")
             except Exception as exc:
+                if _is_remote_404(exc) and REMOTE_TXT2IMG_MODEL and REMOTE_TXT2IMG_MODEL != active_effective_model_id:
+                    try:
+                        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
+                        client_kwargs = dict(
+                            model=REMOTE_TXT2IMG_MODEL,
+                            token=token,
+                            timeout=INFERENCE_TIMEOUT_SEC,
+                        )
+                        if token:
+                            client_kwargs["provider"] = "hf-inference"
+                        fallback_client = InferenceClient(**client_kwargs)
+                        result = fallback_client.text_to_image(**remote_kwargs)
+                        if hasattr(result, "convert"):
+                            image = result
+                        else:
+                            from io import BytesIO
+
+                            from PIL import Image
+
+                            image = Image.open(BytesIO(result)).convert("RGB")
+                        status_snapshot = (
+                            status_snapshot
+                            + "\n\n"
+                            + f"Remote txt2img fallback used: `{REMOTE_TXT2IMG_MODEL}` (router 404 for `{active_effective_model_id}`)."
+                        )
+                    except Exception:
+                        pass
+                if image is not None:
+                    return image, prompt, status_snapshot, gr.update(visible=True)
                 raise gr.Error(
                     "Remote Inference API call failed.\n\n"
                     "Common fixes:\n"
@@ -581,6 +1053,7 @@ def generate(
                     "- Accept the model license on its model page\n\n"
                     f"Model: `{active_effective_model_id}`\n"
                     f"Pipeline: `{active_kind}`\n"
+                    f"Remote txt2img fallback: `{REMOTE_TXT2IMG_MODEL}`\n"
                     f"Error: {exc!r}"
                 ) from exc
         else:
@@ -588,7 +1061,76 @@ def generate(
                 kwargs["max_sequence_length"] = use_seq_len
             image = active_pipe(**kwargs).images[0]
 
-    return image, prompt, status_snapshot
+    return image, prompt, status_snapshot, gr.update(visible=True)
+
+
+def upscale_x2(image):
+    if image is None:
+        raise gr.Error("No hay imagen para escalar. Genera una imagen primero.")
+
+    base_image = image.convert("RGB")
+    base_w, base_h = base_image.size
+
+    # Preferred path: call a Real-ESRGAN Space (better quality than classical resize).
+    # This is optional; if the Space/API is unavailable we fall back to local upscaling.
+    realesrgan_space = os.getenv("REAL_ESRGAN_SPACE", "Nick088/Real-ESRGAN_Pytorch").strip()
+    if realesrgan_space:
+        try:
+            from gradio_client import Client
+
+            client = Client(realesrgan_space)
+            api_name = os.getenv("REAL_ESRGAN_API_NAME", "/predict").strip() or "/predict"
+            size_modifier = os.getenv("REAL_ESRGAN_SIZE", "2").strip() or "2"
+
+            from tempfile import NamedTemporaryFile
+
+            from PIL import Image
+
+            with NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                base_image.save(tmp_path, format="PNG")
+                result_path = client.predict(tmp_path, size_modifier, api_name=api_name)
+                upscaled = Image.open(result_path).convert("RGB")
+                return upscaled
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    if USE_INFERENCE_API and UPSCALE_MODEL.strip():
+        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
+        if token:
+            client = InferenceClient(model=UPSCALE_MODEL, token=token, timeout=INFERENCE_TIMEOUT_SEC)
+            try:
+                result = client.image_to_image(prompt="high quality", image=base_image)
+                if hasattr(result, "convert"):
+                    upscaled = result
+                else:
+                    from io import BytesIO
+
+                    from PIL import Image
+
+                    upscaled = Image.open(BytesIO(result)).convert("RGB")
+
+                target_size = (base_w * 2, base_h * 2)
+                if upscaled.size != target_size:
+                    upscaled = upscaled.resize(target_size, resample=3)
+                return upscaled
+            except Exception:
+                pass
+
+    from PIL import Image, ImageEnhance, ImageFilter
+
+    target_size = (base_w * 2, base_h * 2)
+    upscaled = base_image.resize(target_size, resample=Image.Resampling.LANCZOS)
+    upscaled = upscaled.filter(ImageFilter.DETAIL)
+    upscaled = upscaled.filter(ImageFilter.UnsharpMask(radius=1.2, percent=160, threshold=2))
+    upscaled = ImageEnhance.Contrast(upscaled).enhance(1.06)
+    return upscaled
 
 
 # Initialize pipeline once at startup.
@@ -622,6 +1164,12 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
             value="horreo",
             label="Tema",
         )
+        horreo_variant = gr.Dropdown(
+            choices=HORREO_VARIANT_CHOICES,
+            value="wood",
+            label="Variante de hórreo",
+            visible=True,
+        )
         details = gr.Textbox(
             value=SUBJECT_DETAIL_PRESETS["horreo"],
             label="Detalles del prompt",
@@ -634,7 +1182,7 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
 
     with gr.Row():
         generation_mode = gr.Radio(
-            choices=[("texto-a-imagen", "text-to-image"), ("imagen-a-imagen", "image-to-image")],
+            choices=[("texto-a-imagen", "text-to-image")],
             value="text-to-image",
             label="Modo de generación",
         )
@@ -644,11 +1192,13 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
             value=0.55,
             step=0.05,
             label="Fuerza de la imagen (img2img)",
+            visible=False,
         )
 
     init_image = gr.Image(
         type="pil",
         label="Imagen de referencia (para imagen-a-imagen)",
+        visible=False,
     )
 
     with gr.Row():
@@ -668,19 +1218,26 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
     with gr.Row():
         stable_preset_btn = gr.Button("Aplicar calidad estable")
         run_btn = gr.Button("Generar")
-    output_image = gr.Image(label="Resultado", type="pil")
+    output_image = gr.Image(label="Resultado", type="pil", interactive=False)
+    upscale_btn = gr.Button("Upscale x2 (opcional)", visible=False)
     output_prompt = gr.Textbox(label="Prompt final")
 
     apply_model_btn.click(
         fn=switch_model_and_apply_preset,
-        inputs=[model_selector],
-        outputs=[model_status, steps, guidance, resolution, quality_profile, fast_mode, negative_details],
-    )
-
-    model_selector.change(
-        fn=switch_model_and_apply_preset,
-        inputs=[model_selector],
-        outputs=[model_status, steps, guidance, resolution, quality_profile, fast_mode, negative_details],
+        inputs=[model_selector, subject],
+        outputs=[
+            model_status,
+            steps,
+            guidance,
+            resolution,
+            quality_profile,
+            fast_mode,
+            negative_details,
+            generation_mode,
+            init_image,
+            img2img_strength,
+            details,
+        ],
     )
 
     stable_preset_btn.click(
@@ -690,9 +1247,15 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
     )
 
     subject.change(
-        fn=suggest_details,
+        fn=lambda s, m: (*suggest_details_for_model(s, m),),
+        inputs=[subject, model_selector],
+        outputs=[details, negative_details],
+    )
+
+    subject.change(
+        fn=horreo_variant_update,
         inputs=[subject],
-        outputs=[details],
+        outputs=[horreo_variant],
     )
 
     run_btn.click(
@@ -703,6 +1266,7 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
             negative_details,
             generation_mode,
             init_image,
+            horreo_variant,
             img2img_strength,
             seed,
             steps,
@@ -711,7 +1275,13 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
             fast_mode,
             quality_profile,
         ],
-        outputs=[output_image, output_prompt, model_status],
+        outputs=[output_image, output_prompt, model_status, upscale_btn],
+    )
+
+    upscale_btn.click(
+        fn=upscale_x2,
+        inputs=[output_image],
+        outputs=[output_image],
     )
 
 
