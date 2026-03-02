@@ -766,6 +766,7 @@ def generate(
     generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
 
     with torch.inference_mode():
+        image = None
         kwargs = dict(
             prompt=prompt,
             num_inference_steps=use_steps,
@@ -1017,6 +1018,7 @@ def generate(
 
                     image = Image.open(BytesIO(result)).convert("RGB")
             except Exception as exc:
+                fallback_error = None
                 if _is_remote_404(exc) and REMOTE_TXT2IMG_MODEL and REMOTE_TXT2IMG_MODEL != active_effective_model_id:
                     try:
                         token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
@@ -1028,7 +1030,16 @@ def generate(
                         if token:
                             client_kwargs["provider"] = "hf-inference"
                         fallback_client = InferenceClient(**client_kwargs)
-                        result = fallback_client.text_to_image(**remote_kwargs)
+
+                        fallback_kwargs = dict(remote_kwargs)
+                        fallback_lower = REMOTE_TXT2IMG_MODEL.lower()
+                        if "sdxl-turbo" in fallback_lower:
+                            fallback_kwargs["height"] = min(int(fallback_kwargs.get("height", 512)), 512)
+                            fallback_kwargs["width"] = min(int(fallback_kwargs.get("width", 512)), 512)
+                            fallback_kwargs["guidance_scale"] = 0.0
+                            fallback_kwargs.pop("negative_prompt", None)
+
+                        result = fallback_client.text_to_image(**fallback_kwargs)
                         if hasattr(result, "convert"):
                             image = result
                         else:
@@ -1042,8 +1053,8 @@ def generate(
                             + "\n\n"
                             + f"Remote txt2img fallback used: `{REMOTE_TXT2IMG_MODEL}` (router 404 for `{active_effective_model_id}`)."
                         )
-                    except Exception:
-                        pass
+                    except Exception as fb_exc:
+                        fallback_error = fb_exc
                 if image is not None:
                     return image, prompt, status_snapshot, gr.update(visible=True)
                 raise gr.Error(
@@ -1054,7 +1065,8 @@ def generate(
                     f"Model: `{active_effective_model_id}`\n"
                     f"Pipeline: `{active_kind}`\n"
                     f"Remote txt2img fallback: `{REMOTE_TXT2IMG_MODEL}`\n"
-                    f"Error: {exc!r}"
+                    + (f"Fallback error: {fallback_error!r}\n" if fallback_error is not None else "")
+                    + f"Error: {exc!r}"
                 ) from exc
         else:
             if active_kind == "flux":
