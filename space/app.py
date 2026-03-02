@@ -327,6 +327,7 @@ def _status_text() -> str:
         f"Active model: `{effective_model_id}` | "
         f"Pipeline: `{pipeline_kind}`"
     )
+    base += f"\nApp version: `{APP_VERSION}`"
     base += f"\nRemote img2img backend: `{IMG2IMG_SPACE or 'disabled'}`"
     base += (
         f"\nRemote img2img upload: `{IMG2IMG_UPLOAD_ENDPOINT}` | run: `{IMG2IMG_RUN_ENDPOINT}` "
