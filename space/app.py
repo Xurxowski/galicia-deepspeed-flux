@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import os
+import random
 import threading
 
 import gradio as gr
 import torch
 from diffusers import (
-    FluxImg2ImgPipeline,
     FluxPipeline,
     StableDiffusionImg2ImgPipeline,
     StableDiffusionPipeline,
@@ -21,11 +21,21 @@ CPU_FALLBACK_MODEL = os.getenv("CPU_FALLBACK_MODEL", "LanguageMachines/stable-di
 USE_INFERENCE_API = os.getenv("USE_INFERENCE_API", "1").strip().lower() not in {"0", "false", "no", "off"}
 INFERENCE_TIMEOUT_SEC = float(os.getenv("INFERENCE_TIMEOUT_SEC", "120"))
 REMOTE_TXT2IMG_MODEL = os.getenv(
-    "REMOTE_TXT2IMG_MODEL", "stabilityai/sdxl-turbo"
+    "REMOTE_TXT2IMG_MODEL", "LanguageMachines/stable-diffusion-2-1-base"
 ).strip()
+REMOTE_TXT2IMG_FALLBACKS = [
+    m.strip()
+    for m in os.getenv(
+        "REMOTE_TXT2IMG_FALLBACKS",
+        "LanguageMachines/stable-diffusion-2-1-base,stabilityai/stable-diffusion-xl-base-1.0",
+    ).split(",")
+    if m.strip()
+]
 REMOTE_IMG2IMG_MODEL = os.getenv(
     "REMOTE_IMG2IMG_MODEL", "radames/stable-diffusion-v1-5-img2img"
 ).strip()
+SD2_REMOTE_ON_CPU = os.getenv("SD2_REMOTE_ON_CPU", "0").strip().lower() not in {"0", "false", "no", "off"}
+SDXL_REMOTE_ON_CPU = os.getenv("SDXL_REMOTE_ON_CPU", "1").strip().lower() not in {"0", "false", "no", "off"}
 IMG2IMG_SPACE = os.getenv("IMG2IMG_SPACE", "fffiloni/stable-diffusion-img2img").strip()
 IMG2IMG_API_NAME = os.getenv("IMG2IMG_API_NAME", "/predict").strip() or "/predict"
 IMG2IMG_UPLOAD_ENDPOINT = os.getenv("IMG2IMG_UPLOAD_ENDPOINT", "/gradio_api/upload").strip() or "/gradio_api/upload"
@@ -49,10 +59,7 @@ APP_VERSION = os.getenv("APP_VERSION", "2026-03-02-4")
 MODEL_CHOICES = [
     "black-forest-labs/FLUX.1-schnell",
     "LanguageMachines/stable-diffusion-2-1-base",
-    "stabilityai/sdxl-turbo",
     "stabilityai/stable-diffusion-xl-base-1.0",
-    "ByteDance/SDXL-Lightning",
-    "RunDiffusion/Juggernaut-XL-v9",
 ]
 
 def _pick_torch_dtype() -> torch.dtype:
@@ -249,21 +256,24 @@ def _try_load_lora(current_pipe, kind: str, lora_repo: str, lora_weight_name: st
 
 def _build_pipeline(target_model: str):
     target_lower = target_model.lower()
+    is_flux = "flux" in target_lower
+    is_sdxl = _is_sdxl_model_id(target_model)
+    is_sd2 = _is_sd2_model_id(target_model)
 
-    # Some SDXL finetunes do not include the string "sdxl" in their repo id (e.g. Juggernaut-XL).
-    # Use a conservative heuristic to treat common "XL" checkpoints as SDXL-compatible.
-    is_sdxl = (
-        "sdxl" in target_lower
-        or (
-            "xl" in target_lower
-            and "stable-diffusion-2" not in target_lower
-            and "stable-diffusion-1" not in target_lower
-            and "sd-2" not in target_lower
-            and "sd-1" not in target_lower
+    # CPU architecture:
+    # - FLUX stays remote for responsiveness.
+    # - SD2 defaults local so LoRA can be applied.
+    # - SDXL can stay remote on CPU by default (toggle via SDXL_REMOTE_ON_CPU).
+    use_remote = (
+        not torch.cuda.is_available()
+        and USE_INFERENCE_API
+        and (
+            is_flux
+            or (is_sdxl and SDXL_REMOTE_ON_CPU)
+            or (is_sd2 and SD2_REMOTE_ON_CPU)
         )
     )
-
-    if not torch.cuda.is_available() and USE_INFERENCE_API:
+    if use_remote:
         token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
         client_kwargs = dict(model=target_model, token=token, timeout=INFERENCE_TIMEOUT_SEC)
         if token:
@@ -275,7 +285,7 @@ def _build_pipeline(target_model: str):
         )
         return client, f"remote-{target_model.split('/')[-1].lower()}", target_model, note
 
-    if not torch.cuda.is_available() and not USE_INFERENCE_API and ("flux" in target_lower or is_sdxl):
+    if not torch.cuda.is_available() and not USE_INFERENCE_API and (is_flux or is_sdxl):
         cpu_pipe = StableDiffusionPipeline.from_pretrained(
             CPU_FALLBACK_MODEL,
             torch_dtype=torch.float32,
@@ -287,7 +297,7 @@ def _build_pipeline(target_model: str):
         )
         return cpu_pipe, "cpu-fallback", CPU_FALLBACK_MODEL, note
 
-    if "flux" in target_lower:
+    if is_flux:
         return FluxPipeline.from_pretrained(target_model, torch_dtype=DTYPE), "flux", target_model, ""
 
     if is_sdxl:
@@ -312,8 +322,6 @@ def _build_pipeline(target_model: str):
 def _build_img2img_pipeline(base_pipe, kind: str):
     if kind.startswith("remote-"):
         return None
-    if kind == "flux":
-        return FluxImg2ImgPipeline(**base_pipe.components)
     if kind in {"sd", "cpu-fallback"}:
         return StableDiffusionImg2ImgPipeline(**base_pipe.components)
     if kind == "sdxl":
@@ -335,6 +343,8 @@ def _status_text() -> str:
     )
     base += f"\nRemote img2img model: `{REMOTE_IMG2IMG_MODEL}`"
     base += f"\nRemote txt2img fallback: `{REMOTE_TXT2IMG_MODEL}`"
+    if REMOTE_TXT2IMG_FALLBACKS:
+        base += f"\nRemote txt2img fallbacks: `{', '.join(REMOTE_TXT2IMG_FALLBACKS)}`"
     if lora_active and active_lora_repo:
         if active_lora_weight_name:
             base += f" | LoRA: `{active_lora_repo}` (`{active_lora_weight_name}`)"
@@ -520,15 +530,28 @@ def _model_family_from_id(model_id: str) -> str:
     lower = (model_id or "").lower()
     if "flux" in lower:
         return "flux"
-    if "sdxl-turbo" in lower:
-        return "sdxl_fast"
-    if "sdxl-lightning" in lower:
-        return "sdxl_fast"
-    if "juggernaut" in lower:
-        return "sdxl_quality"
     if "stable-diffusion-xl" in lower or lower.endswith("sdxl-base-1.0"):
         return "sdxl_quality"
     return "sd"
+
+
+def _is_sdxl_model_id(model_id: str) -> bool:
+    lower = (model_id or "").lower()
+    return (
+        "sdxl" in lower
+        or (
+            "xl" in lower
+            and "stable-diffusion-2" not in lower
+            and "stable-diffusion-1" not in lower
+            and "sd-2" not in lower
+            and "sd-1" not in lower
+        )
+    )
+
+
+def _is_sd2_model_id(model_id: str) -> bool:
+    lower = (model_id or "").lower()
+    return "stable-diffusion-2" in lower or "sd-2" in lower or "sd2" in lower
 
 
 def suggest_details_for_model(subject: str, model_id: str) -> tuple[str, str]:
@@ -583,25 +606,20 @@ def recommended_preset():
         model_id = effective_model_id
 
     if kind.startswith("remote-"):
-        # Remote Inference API is usually queued / shared; keep defaults small for responsiveness.
-        effective_lower = model_id.lower()
-        if "sdxl-turbo" in effective_lower:
-            # SDXL Turbo is trained for guidance_scale=0 and 512px.
-            return (4, 0.0, 512, "fast", True, DEFAULT_NEGATIVE)
-        if "sdxl-lightning" in effective_lower:
-            return (4, 1.5, 640, "fast", True, DEFAULT_NEGATIVE)
-        if "juggernaut" in effective_lower:
+        # Remote Inference API is usually queued/shared; keep defaults small for responsiveness.
+        if _is_sdxl_model_id(model_id):
             return (8, 4.0, 640, "stable", False, DEFAULT_NEGATIVE)
+        if _is_sd2_model_id(model_id):
+            return (10, 5.5, 640, "stable", False, DEFAULT_NEGATIVE)
         return (3, 3.0, 640, "fast", True, DEFAULT_NEGATIVE)
     if kind == "flux":
         return (4, 3.5, 1024, "stable", False, DEFAULT_NEGATIVE)
     if kind == "sdxl":
-        # SDXL Turbo is designed for very low steps.
-        return (4, 3.0, 512, "stable", False, DEFAULT_NEGATIVE)
+        return (10, 5.0, 640, "stable", False, DEFAULT_NEGATIVE)
     if kind == "cpu-fallback":
         return (1, 0.0, 512, "stable", False, DEFAULT_NEGATIVE)
-    # Generic SD pipeline (higher-quality but slower).
-    return (25, 7.0, 768, "stable", False, DEFAULT_NEGATIVE)
+    # SD2 local on CPU: default to moderate quality/cost.
+    return (16, 6.5, 640, "stable", False, DEFAULT_NEGATIVE)
 
 
 def apply_stable_preset():
@@ -613,31 +631,13 @@ def generation_mode_update():
     with MODEL_LOCK:
         kind = pipeline_kind
         model_id = effective_model_id
+        has_local_i2i = img2img_pipe is not None
 
-    effective_lower = model_id.lower()
-    is_sdxl_turbo = "sdxl-turbo" in effective_lower
-    is_sdxl_model = (
-        "sdxl" in effective_lower
-        or (
-            "xl" in effective_lower
-            and "stable-diffusion-2" not in effective_lower
-            and "stable-diffusion-1" not in effective_lower
-            and "sd-2" not in effective_lower
-            and "sd-1" not in effective_lower
-        )
-    )
-
-    is_sd2_model = (
-        "stable-diffusion-2" in effective_lower
-        or "sd-2" in effective_lower
-        or "sd2" in effective_lower
-    )
-
-    img2img_supported = False
+    eligible_model = _is_sd2_model_id(model_id) or _is_sdxl_model_id(model_id)
     if kind.startswith("remote-"):
-        img2img_supported = (is_sdxl_model or is_sd2_model) and not is_sdxl_turbo
+        img2img_supported = eligible_model
     else:
-        img2img_supported = img2img_pipe is not None
+        img2img_supported = eligible_model and has_local_i2i
 
     if img2img_supported:
         return gr.update(
@@ -653,29 +653,11 @@ def img2img_controls_update():
         model_id = effective_model_id
         has_local_i2i = img2img_pipe is not None
 
-    effective_lower = model_id.lower()
-    is_sdxl_turbo = "sdxl-turbo" in effective_lower
-    is_sdxl_model = (
-        "sdxl" in effective_lower
-        or (
-            "xl" in effective_lower
-            and "stable-diffusion-2" not in effective_lower
-            and "stable-diffusion-1" not in effective_lower
-            and "sd-2" not in effective_lower
-            and "sd-1" not in effective_lower
-        )
-    )
-
-    is_sd2_model = (
-        "stable-diffusion-2" in effective_lower
-        or "sd-2" in effective_lower
-        or "sd2" in effective_lower
-    )
-
+    eligible_model = _is_sd2_model_id(model_id) or _is_sdxl_model_id(model_id)
     if kind.startswith("remote-"):
-        visible = (is_sdxl_model or is_sd2_model) and not is_sdxl_turbo
+        visible = eligible_model
     else:
-        visible = has_local_i2i
+        visible = eligible_model and has_local_i2i
 
     return (
         gr.update(visible=visible),
@@ -712,6 +694,7 @@ def generate(
     init_image,
     horreo_variant: str,
     img2img_strength: float,
+    randomize_seed: bool,
     seed: int,
     steps: int,
     guidance: float,
@@ -741,30 +724,13 @@ def generate(
         active_effective_model_id = effective_model_id
         status_snapshot = _status_text()
 
-    effective_lower = active_effective_model_id.lower()
-    is_sdxl_turbo = "sdxl-turbo" in effective_lower
-    is_sdxl_model = (
-        "sdxl" in effective_lower
-        or (
-            "xl" in effective_lower
-            and "stable-diffusion-2" not in effective_lower
-            and "stable-diffusion-1" not in effective_lower
-            and "sd-2" not in effective_lower
-            and "sd-1" not in effective_lower
-        )
-    )
-    is_sd2_model = (
-        "stable-diffusion-2" in effective_lower
-        or "sd-2" in effective_lower
-        or "sd2" in effective_lower
-    )
-    remote_img2img_supported = (
-        active_kind.startswith("remote-")
-        and (is_sdxl_model or is_sd2_model)
-        and not is_sdxl_turbo
-    )
+    is_sdxl_model = _is_sdxl_model_id(active_effective_model_id)
+    is_sd2_model = _is_sd2_model_id(active_effective_model_id)
+    remote_img2img_supported = active_kind.startswith("remote-") and (is_sdxl_model or is_sd2_model)
 
-    generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed)
+    seed_value = random.randint(0, 2_000_000_000) if randomize_seed else int(seed)
+    generator = torch.Generator(device=GENERATOR_DEVICE).manual_seed(seed_value)
+    status_snapshot = status_snapshot + f"\n\nSeed usado: `{seed_value}`"
 
     with torch.inference_mode():
         image = None
@@ -784,11 +750,13 @@ def generate(
         if generation_mode == "image-to-image":
             if init_image is None:
                 raise gr.Error("Sube una imagen de referencia para usar image-to-image.")
+            if not (is_sdxl_model or is_sd2_model):
+                raise gr.Error("Image-to-image solo está disponible para SD 2.1 base y SDXL base 1.0.")
             if active_kind.startswith("remote-"):
                 if not remote_img2img_supported:
                     raise gr.Error(
-                        "Image-to-image en modo remoto (Inference API) solo está habilitado para modelos SDXL/SD2 (no Turbo) en este Space. "
-                        "Para FLUX/SDXL Turbo remotos usa `texto-a-imagen`."
+                        "Image-to-image en modo remoto (Inference API) solo está habilitado para SD2/SDXL en este Space. "
+                        "Para FLUX remoto usa `texto-a-imagen`."
                     )
 
                 reference_image = init_image.convert("RGB").resize((use_resolution, use_resolution))
@@ -806,7 +774,7 @@ def generate(
                     strength_value = max(0.05, min(1.0, float(img2img_strength)))
                     guide_value = float(guidance)
                     steps_value = int(use_steps)
-                    seed_value = int(seed)
+                    seed_value = int(seed_value)
 
                     with NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         tmp_path = tmp.name
@@ -825,15 +793,15 @@ def generate(
                             url = f"{base_url}{ep}"
                             # Gradio upload endpoints have historically accepted slightly different multipart shapes.
                             # Try the two common forms:
-                            # - files={"files": (name, fp, mime)}
-                            # - files=[("files", (name, fp, mime))]
+                            # - files={"file": (name, fp, mime)}
+                            # - files=[("file", (name, fp, mime))]
                             for mode in ("dict", "list"):
                                 try:
                                     with open(tmp_path, "rb") as f:
                                         if mode == "dict":
-                                            files = {"files": (os.path.basename(tmp_path), f, "image/png")}
+                                            files = {"file": (os.path.basename(tmp_path), f, "image/png")}
                                         else:
-                                            files = [("files", (os.path.basename(tmp_path), f, "image/png"))]
+                                            files = [("file", (os.path.basename(tmp_path), f, "image/png"))]
                                         resp = requests.post(
                                             url,
                                             files=files,
@@ -884,7 +852,7 @@ def generate(
                         payload = {
                             "fn_index": IMG2IMG_FN_INDEX,
                             "data": [
-                                {"path": uploaded_path},
+                                uploaded_path,
                                 prompt,
                                 guide_value,
                                 steps_value,
@@ -977,8 +945,6 @@ def generate(
             reference_image = init_image.convert("RGB").resize((use_resolution, use_resolution))
             kwargs["image"] = reference_image
             kwargs["strength"] = max(0.05, min(1.0, float(img2img_strength)))
-            if active_kind == "flux":
-                kwargs["max_sequence_length"] = use_seq_len
             image = active_img2img_pipe(**kwargs).images[0]
         elif active_kind.startswith("remote-"):
             try:
@@ -988,14 +954,9 @@ def generate(
                     width=use_resolution,
                     num_inference_steps=use_steps,
                     guidance_scale=guidance,
-                    seed=seed,
+                    seed=seed_value,
                 )
-                if is_sdxl_turbo:
-                    # SDXL Turbo does not use negative_prompt and works best with guidance_scale=0.
-                    remote_kwargs["height"] = min(remote_kwargs["height"], 512)
-                    remote_kwargs["width"] = min(remote_kwargs["width"], 512)
-                    remote_kwargs["guidance_scale"] = 0.0
-                elif negative_text:
+                if negative_text:
                     remote_kwargs["negative_prompt"] = negative_text
 
                 def _is_remote_404(error: Exception) -> bool:
@@ -1009,7 +970,42 @@ def generate(
                     text = repr(error)
                     return "404" in text and "Not Found" in text
 
-                result = active_pipe.text_to_image(**remote_kwargs)
+                def _remote_txt2img_try_models(primary_model_id: str, call_kwargs: dict):
+                    token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
+                    tried = []
+
+                    def _client_for(model_id: str):
+                        client_kwargs = dict(model=model_id, token=token, timeout=INFERENCE_TIMEOUT_SEC)
+                        if token:
+                            client_kwargs["provider"] = "hf-inference"
+                        return InferenceClient(**client_kwargs)
+
+                    candidates = []
+                    if primary_model_id:
+                        candidates.append(primary_model_id)
+                    if REMOTE_TXT2IMG_MODEL and REMOTE_TXT2IMG_MODEL not in candidates:
+                        candidates.append(REMOTE_TXT2IMG_MODEL)
+                    for mid in REMOTE_TXT2IMG_FALLBACKS:
+                        if mid not in candidates:
+                            candidates.append(mid)
+
+                    last_exc = None
+                    for model_id in candidates:
+                        tried.append(model_id)
+                        try:
+                            per_model_kwargs = dict(call_kwargs)
+                            result = _client_for(model_id).text_to_image(**per_model_kwargs)
+                            return result, model_id, tried
+                        except Exception as exc:
+                            last_exc = exc
+                            if _is_remote_404(exc):
+                                continue
+                            raise
+                    raise last_exc
+
+                result, used_model_id, tried_models = _remote_txt2img_try_models(
+                    active_effective_model_id, remote_kwargs
+                )
                 if hasattr(result, "convert"):
                     image = result
                 else:
@@ -1018,44 +1014,15 @@ def generate(
                     from PIL import Image
 
                     image = Image.open(BytesIO(result)).convert("RGB")
+
+                if used_model_id != active_effective_model_id:
+                    status_snapshot = (
+                        status_snapshot
+                        + "\n\n"
+                        + f"Remote txt2img router fallback used: `{used_model_id}` (requested `{active_effective_model_id}`)."
+                        + f"\nTried: {', '.join(tried_models)}"
+                    )
             except Exception as exc:
-                fallback_error = None
-                if _is_remote_404(exc) and REMOTE_TXT2IMG_MODEL and REMOTE_TXT2IMG_MODEL != active_effective_model_id:
-                    try:
-                        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
-                        client_kwargs = dict(
-                            model=REMOTE_TXT2IMG_MODEL,
-                            token=token,
-                            timeout=INFERENCE_TIMEOUT_SEC,
-                        )
-                        if token:
-                            client_kwargs["provider"] = "hf-inference"
-                        fallback_client = InferenceClient(**client_kwargs)
-
-                        fallback_kwargs = dict(remote_kwargs)
-                        fallback_lower = REMOTE_TXT2IMG_MODEL.lower()
-                        if "sdxl-turbo" in fallback_lower:
-                            fallback_kwargs["height"] = min(int(fallback_kwargs.get("height", 512)), 512)
-                            fallback_kwargs["width"] = min(int(fallback_kwargs.get("width", 512)), 512)
-                            fallback_kwargs["guidance_scale"] = 0.0
-                            fallback_kwargs.pop("negative_prompt", None)
-
-                        result = fallback_client.text_to_image(**fallback_kwargs)
-                        if hasattr(result, "convert"):
-                            image = result
-                        else:
-                            from io import BytesIO
-
-                            from PIL import Image
-
-                            image = Image.open(BytesIO(result)).convert("RGB")
-                        status_snapshot = (
-                            status_snapshot
-                            + "\n\n"
-                            + f"Remote txt2img fallback used: `{REMOTE_TXT2IMG_MODEL}` (router 404 for `{active_effective_model_id}`)."
-                        )
-                    except Exception as fb_exc:
-                        fallback_error = fb_exc
                 if image is not None:
                     return image, prompt, status_snapshot, gr.update(visible=True)
                 raise gr.Error(
@@ -1066,8 +1033,7 @@ def generate(
                     f"Model: `{active_effective_model_id}`\n"
                     f"Pipeline: `{active_kind}`\n"
                     f"Remote txt2img fallback: `{REMOTE_TXT2IMG_MODEL}`\n"
-                    + (f"Fallback error: {fallback_error!r}\n" if fallback_error is not None else "")
-                    + f"Error: {exc!r}"
+                    f"Error: {exc!r}"
                 ) from exc
         else:
             if active_kind == "flux":
@@ -1083,6 +1049,9 @@ def upscale_x2(image):
 
     base_image = image.convert("RGB")
     base_w, base_h = base_image.size
+    status = _status_text()
+    real_esrgan_error = None
+    remote_upscale_error = None
 
     # Preferred path: call a Real-ESRGAN Space (better quality than classical resize).
     # This is optional; if the Space/API is unavailable we fall back to local upscaling.
@@ -1105,14 +1074,14 @@ def upscale_x2(image):
                 base_image.save(tmp_path, format="PNG")
                 result_path = client.predict(tmp_path, size_modifier, api_name=api_name)
                 upscaled = Image.open(result_path).convert("RGB")
-                return upscaled
+                return upscaled, status + f"\n\nUpscaler: Real-ESRGAN (`{realesrgan_space}`)."
             finally:
                 try:
                     os.remove(tmp_path)
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as exc:
+            real_esrgan_error = repr(exc)
 
     if USE_INFERENCE_API and UPSCALE_MODEL.strip():
         token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
@@ -1132,9 +1101,9 @@ def upscale_x2(image):
                 target_size = (base_w * 2, base_h * 2)
                 if upscaled.size != target_size:
                     upscaled = upscaled.resize(target_size, resample=3)
-                return upscaled
-            except Exception:
-                pass
+                return upscaled, status + f"\n\nUpscaler: Inference API (`{UPSCALE_MODEL}`)."
+            except Exception as exc:
+                remote_upscale_error = repr(exc)
 
     from PIL import Image, ImageEnhance, ImageFilter
 
@@ -1143,7 +1112,12 @@ def upscale_x2(image):
     upscaled = upscaled.filter(ImageFilter.DETAIL)
     upscaled = upscaled.filter(ImageFilter.UnsharpMask(radius=1.2, percent=160, threshold=2))
     upscaled = ImageEnhance.Contrast(upscaled).enhance(1.06)
-    return upscaled
+    fallback_note = "Upscaler: fallback local (Lanczos + UnsharpMask)."
+    if real_esrgan_error:
+        fallback_note += f"\nReal-ESRGAN no disponible: `{real_esrgan_error}`"
+    if remote_upscale_error:
+        fallback_note += f"\nInference API upscale no disponible: `{remote_upscale_error}`"
+    return upscaled, status + f"\n\n{fallback_note}"
 
 
 # Initialize pipeline once at startup.
@@ -1215,7 +1189,8 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
     )
 
     with gr.Row():
-        seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Semilla")
+        seed = gr.Slider(minimum=0, maximum=2_000_000_000, value=42, step=1, label="Semilla fija")
+        randomize_seed = gr.Checkbox(value=True, label="Semilla aleatoria en cada clic")
         steps = gr.Slider(minimum=1, maximum=60, value=INIT_STEPS, step=1, label="Pasos")
         guidance = gr.Slider(minimum=0.0, maximum=12.0, value=INIT_GUIDANCE, step=0.1, label="Orientación")
         resolution = gr.Slider(minimum=512, maximum=1024, value=INIT_RESOLUTION, step=64, label="Resolución")
@@ -1281,6 +1256,7 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
             init_image,
             horreo_variant,
             img2img_strength,
+            randomize_seed,
             seed,
             steps,
             guidance,
@@ -1294,8 +1270,8 @@ with gr.Blocks(title="Hórreos y Cruceiros de Galicia") as demo:
     upscale_btn.click(
         fn=upscale_x2,
         inputs=[output_image],
-        outputs=[output_image],
+        outputs=[output_image, model_status],
     )
 
 
-demo.launch()
+demo.queue(default_concurrency_limit=1, max_size=24).launch()
